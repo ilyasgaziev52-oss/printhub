@@ -86,6 +86,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "notify_events": ["finished", "error", "paused", "offline"],
     "slicer_path": "",
     "slicer_profiles_dir": "",
+    "prusaslicer_path": "",
+    "uvtools_path": "",
+    "resin_profiles_dir": "",
     "auth_password": "",
     "discovery_subnet": "",            # например 192.168.1.0/24; пусто — автоопределение
     "camera_fps": 2,

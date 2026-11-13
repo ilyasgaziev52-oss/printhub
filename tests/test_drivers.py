@@ -11,7 +11,7 @@ from printhub.drivers.elegoo import ElegooSdcpDriver
 from printhub.drivers.moonraker import MoonrakerDriver
 from printhub.models import PrinterConfig, PrinterState
 
-from .mocks import MoonrakerPrinter, SdcpPrinter
+from printhub.emulators import MoonrakerPrinter, SdcpPrinter
 
 
 async def wait_for(cond, timeout=5.0):

@@ -33,21 +33,35 @@ from .notify import send_telegram
 from . import slicer as slicermod
 
 log = logging.getLogger("printhub.app")
+
+
+def session_token(password: str) -> str:
+    import hashlib
+    return hashlib.sha256(("printhub:" + password).encode()).hexdigest()
 WEB_DIR = Path(__file__).parent / "web"
 
 
-def create_app(data_dir: Optional[str] = None) -> FastAPI:
+def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
     data = Path(data_dir or os.environ.get("PRINTHUB_DATA", Path.cwd() / "data")).resolve()
     data.mkdir(parents=True, exist_ok=True)
     db = Database(data / "printhub.sqlite3")
     db.seed_materials()
     mgr = PrinterManager(db, data)
 
+    demo_obj = None
+    if demo:
+        from .demo import Demo
+        demo_obj = Demo(db, data)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ANN202
+        if demo_obj:
+            await demo_obj.start()
         await mgr.start()
         yield
         await mgr.stop()
+        if demo_obj:
+            await demo_obj.stop()
 
     app = FastAPI(title="PrintHub", version=__version__, lifespan=lifespan)
     app.state.db = db
@@ -66,9 +80,14 @@ def create_app(data_dir: Optional[str] = None) -> FastAPI:
                     ok = secrets.compare_digest(given, pwd)
                 except Exception:  # noqa: BLE001
                     ok = False
+            if not ok and secrets.compare_digest(request.cookies.get("ph_session", ""), session_token(pwd)):
+                ok = True
             if not ok:
                 return Response("Требуется пароль", status_code=401,
                                 headers={"WWW-Authenticate": 'Basic realm="PrintHub"'})
+            resp = await call_next(request)
+            resp.set_cookie("ph_session", session_token(pwd), httponly=True, samesite="strict")
+            return resp
         return await call_next(request)
 
     def err(e: Exception) -> HTTPException:
@@ -84,8 +103,11 @@ def create_app(data_dir: Optional[str] = None) -> FastAPI:
     # ------------------------------------------------------------------ общее
     @app.get("/api/info")
     async def info() -> dict[str, Any]:
+        s = db.get_settings()
         return {"version": __version__, "data_dir": str(data), "subnet": default_subnet(),
-                "slicers": slicermod.find_slicers(db.get_settings().get("slicer_path", ""))}
+                "slicers": slicermod.find_slicers(s.get("slicer_path", "")),
+                "prusaslicer": slicermod.find_prusaslicer(s.get("prusaslicer_path", "")),
+                "uvtools": slicermod.find_uvtools(s.get("uvtools_path", ""))}
 
     @app.get("/api/drivers")
     async def drivers() -> list[dict[str, Any]]:
@@ -483,13 +505,42 @@ def create_app(data_dir: Optional[str] = None) -> FastAPI:
                 s.get("slicer_path", ""), it["stored_path"], machine=body.get("machine", ""),
                 process=body.get("process", ""), filaments=body.get("filaments") or [],
                 work_dir=str(data / "slicing"), arrange=bool(body.get("arrange", True)),
-                orient=bool(body.get("orient", False)), profiles_dir=s.get("slicer_profiles_dir", ""))
+                orient=bool(body.get("orient", False)), profiles_dir=s.get("slicer_profiles_dir", ""),
+                bed_type=body.get("bed_type", ""), plate=int(body.get("plate") or 0))
         except Exception as e:  # noqa: BLE001
             raise err(e) from e
         stem = Path(it["filename"]).stem
         new = store_upload(out_path, f"{stem}.gcode.3mf", mgr.library_dir)
         analysis, thumb = await asyncio.to_thread(analyze_path, new["stored_path"], new["filename"])
         new.update(kind=analysis["kind"], technology="fdm", analysis=analysis, thumbnail=thumb)
+        db.add_library_item(new)
+        await mgr.broadcast({"type": "library_changed"})
+        return {"item_id": new["id"], "summary": summarize_analysis(analysis), "log": log_text[-4000:]}
+
+    @app.get("/api/slicer/resin-profiles")
+    async def resin_profiles() -> dict[str, Any]:
+        s = db.get_settings()
+        return await asyncio.to_thread(slicermod.resin_profiles,
+                                       slicermod.find_uvtools(s.get("uvtools_path", "")), s.get("resin_profiles_dir", ""))
+
+    @app.post("/api/library/{lid}/slice-resin")
+    async def slice_resin_item(lid: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        it = db.get_library_item(lid)
+        if not it:
+            raise HTTPException(404, "Файл не найден")
+        s = db.get_settings()
+        try:
+            out_path, log_text = await slicermod.slice_resin(
+                s.get("prusaslicer_path", ""), s.get("uvtools_path", ""), it["stored_path"],
+                printer_ini=body.get("printer", ""), print_ini=body.get("print", ""),
+                work_dir=str(data / "slicing"), exposure_s=body.get("exposure_s"),
+                bottom_exposure_s=body.get("bottom_exposure_s"), bottom_layers=body.get("bottom_layers"),
+                target=body.get("target") or "auto")
+        except Exception as e:  # noqa: BLE001
+            raise err(e) from e
+        new = store_upload(out_path, Path(out_path).name, mgr.library_dir)
+        analysis, thumb = await asyncio.to_thread(analyze_path, new["stored_path"], new["filename"])
+        new.update(kind=analysis["kind"], technology="resin", analysis=analysis, thumbnail=thumb)
         db.add_library_item(new)
         await mgr.broadcast({"type": "library_changed"})
         return {"item_id": new["id"], "summary": summarize_analysis(analysis), "log": log_text[-4000:]}
@@ -637,8 +688,7 @@ def create_app(data_dir: Optional[str] = None) -> FastAPI:
     @app.websocket("/api/ws")
     async def ws(websocket: WebSocket) -> None:
         pwd = db.get_settings().get("auth_password") or ""
-        if pwd and not secrets.compare_digest(websocket.query_params.get("token", ""), pwd):
-            # браузер не передаёт Basic-авторизацию в WebSocket — пароль передаётся параметром
+        if pwd and not secrets.compare_digest(websocket.cookies.get("ph_session", ""), session_token(pwd)):
             await websocket.close(code=4401)
             return
         await websocket.accept()

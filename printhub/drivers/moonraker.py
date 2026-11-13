@@ -49,6 +49,7 @@ class MoonrakerDriver(PrinterDriver):
         self._req_id = 0
         self._meta_cache: dict[str, dict[str, Any]] = {}
         self._port = self.cfg.port or 0
+        self._has_cam = False
 
     # ------------------------------------------------------------------ http
     @property
@@ -93,6 +94,10 @@ class MoonrakerDriver(PrinterDriver):
         await self._resolve_port()
         info = await self._get("/printer/info")
         self.status.firmware = f"Klipper {info.get('software_version', '')}"
+        try:
+            self._has_cam = bool((await self._get("/server/webcams/list") or {}).get("webcams"))
+        except Exception:  # noqa: BLE001
+            self._has_cam = False
         url = self.base.replace("http://", "ws://") + "/websocket"
         if self.cfg.api_key:
             try:
@@ -206,7 +211,7 @@ class MoonrakerDriver(PrinterDriver):
     # ------------------------------------------------------------------ операции
     def capabilities(self) -> Capabilities:
         return Capabilities(upload=True, start=True, pause=True, resume=True, stop=True, files=True,
-                            delete=True, camera=True, light="output_pin caselight" in self._objects,
+                            delete=True, camera=self._has_cam, light="output_pin caselight" in self._objects,
                             gcode=True, speed=True)
 
     async def list_files(self) -> list[FileEntry]:

@@ -327,16 +327,24 @@ const PRESETS = {
   'Bambu Lab H2D': { kind: 'bambu', build_volume: [325, 320, 325], power_w: 250 },
   'Bambu Lab H2S': { kind: 'bambu', build_volume: [340, 320, 340], power_w: 230 },
   'Elegoo Centauri Carbon': { kind: 'elegoo_sdcp', build_volume: [256, 256, 256], power_w: 150 },
+  'Elegoo Centauri Carbon 2': { kind: 'elegoo_cc2', build_volume: [256, 256, 256], power_w: 160 },
+  'Elegoo Centauri 2': { kind: 'elegoo_cc2', build_volume: [256, 256, 256], power_w: 150 },
   'Elegoo Saturn 4 Ultra': { kind: 'elegoo_sdcp', technology: 'resin', build_volume: [218, 123, 220], power_w: 70 },
   'Elegoo Saturn 4 Ultra 16K': { kind: 'elegoo_sdcp', technology: 'resin', build_volume: [211, 118, 220], power_w: 70 },
-  'Elegoo Saturn 3 Ultra': { kind: 'elegoo_sdcp', technology: 'resin', build_volume: [218, 123, 260], power_w: 70 },
   'Elegoo Mars 5 Ultra': { kind: 'elegoo_sdcp', technology: 'resin', build_volume: [153, 77, 165], power_w: 50 },
   'Elegoo Neptune 4 / 4 Pro': { kind: 'moonraker', build_volume: [225, 225, 265], power_w: 140 },
   'Elegoo Neptune 4 Plus': { kind: 'moonraker', build_volume: [320, 320, 385], power_w: 180 },
   'Elegoo Neptune 4 Max': { kind: 'moonraker', build_volume: [420, 420, 480], power_w: 250 },
-  'Anycubic Kobra 3 / S1 (Rinkhals)': { kind: 'moonraker', build_volume: [250, 250, 260], power_w: 150 },
-  'Anycubic Photon Mono X / X 6K': { kind: 'anycubic_photon', technology: 'resin', build_volume: [192, 120, 245], power_w: 60 },
-  'Anycubic (через OctoPrint)': { kind: 'octoprint', build_volume: [220, 220, 250], power_w: 130 },
+  'Anycubic Kobra 3 / 3 V2': { kind: 'anycubic_lan', build_volume: [250, 250, 260], power_w: 140 },
+  'Anycubic Kobra 3 Max': { kind: 'anycubic_lan', build_volume: [420, 420, 500], power_w: 250 },
+  'Anycubic Kobra S1': { kind: 'anycubic_lan', build_volume: [250, 250, 250], power_w: 160 },
+  'Anycubic Kobra S1 Max': { kind: 'anycubic_lan', build_volume: [340, 340, 340], power_w: 200 },
+  'Anycubic Kobra 4': { kind: 'anycubic_lan', build_volume: [250, 250, 260], power_w: 150 },
+  'Anycubic Kobra X': { kind: 'anycubic_lan', build_volume: [260, 260, 260], power_w: 150 },
+  'Anycubic Kobra с Rinkhals (Klipper)': { kind: 'moonraker', build_volume: [250, 250, 260], power_w: 150 },
+  'Anycubic Photon P1': { kind: 'anycubic_lan', technology: 'resin', build_volume: [223, 126, 230], power_w: 60 },
+  'Anycubic Photon Mono X / X 6K / SE': { kind: 'anycubic_photon', technology: 'resin', build_volume: [192, 120, 245], power_w: 60 },
+  'Anycubic Kobra 2 / Kobra (через OctoPrint)': { kind: 'octoprint', build_volume: [220, 220, 250], power_w: 130 },
 };
 
 async function renderDiscover() {
@@ -349,8 +357,8 @@ async function renderDiscover() {
           <label class="row small muted"><input type="checkbox" id="scan" checked> сканировать подсеть</label>
           <input id="subnet" placeholder="${esc(S.info.subnet || '192.168.1.0/24')}" style="width:160px" title="Подсеть для сканирования">
           <button class="btn primary" id="discover-btn">🔍 Найти принтеры</button></div>
-        <p class="muted small">Bambu Lab отвечают по SSDP, Elegoo — по протоколу SDCP, Klipper/OctoPrint/Anycubic находятся сканированием портов.
-          Программа должна работать на компьютере в той же сети, что и принтеры.</p>
+        <p class="muted small">Bambu Lab находятся по SSDP, Elegoo — по SDCP и UDP-запросу Centauri 2, Anycubic, Klipper и OctoPrint — сканированием портов.
+          Программа должна работать на компьютере в той же сети, что и принтеры. Поиск занимает до 15 секунд.</p>
         <div id="found"></div>
       </div>
     </div>
@@ -412,9 +420,9 @@ function editPrinter(cfg, needs = []) {
       <label class="field">Название<input name="name" value="${esc(cfg.name || '')}" placeholder="Например: Bambu #1"></label>
       <label class="field">IP-адрес<input name="host" value="${esc(cfg.host || '')}" placeholder="192.168.1.50"></label>
       <label class="field">Модель<input name="model" value="${esc(cfg.model || '')}"></label>
-      <label class="field" data-for="bambu elegoo_sdcp anycubic_lan">Серийный номер / ID<input name="serial" value="${esc(cfg.serial || '')}"></label>
-      <label class="field" data-for="bambu anycubic_lan">Код доступа (LAN Access Code)<input name="access_code" value="${esc(cfg.access_code || '')}" ${needs.includes('access_code') ? 'autofocus' : ''}></label>
-      <label class="field" data-for="octoprint moonraker anycubic_lan">API-ключ<input name="api_key" value="${esc(cfg.api_key || '')}"></label>
+      <label class="field" data-for="bambu elegoo_sdcp elegoo_cc2">Серийный номер (пусто — определить автоматически)<input name="serial" value="${esc(cfg.serial || '')}"></label>
+      <label class="field" data-for="bambu elegoo_cc2">Код доступа${cfg.kind === 'elegoo_cc2' ? ' (если задан на принтере)' : ' (LAN Access Code)'}<input name="access_code" value="${esc(cfg.access_code || '')}" ${needs.includes('access_code') ? 'autofocus' : ''}></label>
+      <label class="field" data-for="octoprint moonraker">API-ключ${cfg.kind === 'moonraker' ? ' (если включена авторизация)' : ''}<input name="api_key" value="${esc(cfg.api_key || '')}"></label>
       <label class="field">Порт (0 — по умолчанию)<input name="port" type="number" value="${cfg.port || 0}"></label>
       <label class="field">Технология<select name="technology"><option value="fdm" ${cfg.technology !== 'resin' ? 'selected' : ''}>FDM (пластик)</option><option value="resin" ${cfg.technology === 'resin' ? 'selected' : ''}>Фотополимер (смола)</option></select></label>
       <label class="field">Область печати X × Y × Z, мм<span class="row"><input name="bx" type="number" value="${bv[0] || ''}" style="width:70px"><input name="by" type="number" value="${bv[1] || ''}" style="width:70px"><input name="bz" type="number" value="${bv[2] || ''}" style="width:70px"></span></label>
@@ -448,7 +456,11 @@ function editPrinter(cfg, needs = []) {
   $('#test', f).onclick = async () => {
     $('#test-res', f).textContent = 'проверяю…';
     const r = await guard(() => api('/printers/test', { method: 'POST', json: val() }));
-    if (r) $('#test-res', f).innerHTML = r.ok ? `<span style="color:var(--ok)">✓ Связь есть</span> ${esc(r.model || r.version || r.state || '')}` : `<span style="color:var(--err)">✗ ${esc(r.error)}</span>`;
+    if (r) {
+      $('#test-res', f).innerHTML = r.ok ? `<span style="color:var(--ok)">✓ Связь есть</span> ${esc(r.model || r.version || r.state || '')}${r.warning ? `<br><span style="color:var(--warn)">⚠ ${esc(r.warning)}</span>` : ''}` : `<span style="color:var(--err)">✗ ${esc(r.error)}</span>`;
+      if (r.ok && r.serial && !f.querySelector('[name=serial]').value) f.querySelector('[name=serial]').value = r.serial;
+      if (r.ok && r.model && !f.querySelector('[name=model]').value) f.querySelector('[name=model]').value = r.model;
+    }
     else $('#test-res', f).textContent = '';
   };
   $('#save', f).onclick = async () => {
@@ -594,7 +606,7 @@ async function sendDialog(id) {
   const upd = () => {
     const p = S.printers[g('printer').value];
     $('#bambu-opts', f).classList.toggle('hidden', p.config.kind !== 'bambu');
-    $('#elegoo-opts', f).classList.toggle('hidden', p.config.kind !== 'elegoo_sdcp' || p.config.technology === 'resin');
+    $('#elegoo-opts', f).classList.toggle('hidden', !['elegoo_sdcp', 'elegoo_cc2', 'anycubic_lan'].includes(p.config.kind) || p.config.technology === 'resin');
     const w = $('#warn', f);
     const accepts = p.accepts || [];
     const name = it.filename.toLowerCase();
@@ -613,7 +625,8 @@ async function sendDialog(id) {
   const opts = () => {
     const p = S.printers[g('printer').value];
     if (p.config.kind === 'bambu') return { use_ams: g('use_ams').checked, bed_leveling: g('bed_leveling').checked, flow_cali: g('flow_cali').checked, timelapse: g('timelapse').checked };
-    if (p.config.kind === 'elegoo_sdcp') return { calibration: g('calibration').checked, timelapse: g('tlp').checked };
+    if (['elegoo_sdcp', 'elegoo_cc2'].includes(p.config.kind)) return { calibration: g('calibration').checked, timelapse: g('tlp').checked };
+    if (p.config.kind === 'anycubic_lan') return { bed_leveling: g('calibration').checked, timelapse: g('tlp').checked };
     return {};
   };
   const send = async (start) => {
@@ -703,9 +716,12 @@ async function renderPrepare() {
       </div>
       <div class="panel"><h3>Оценка до нарезки</h3><div id="estimate" class="small muted">—</div></div>
       <div class="panel"><h3>Нарезка (слайсер)</h3>
-        ${info.length ? `<p class="small">Найден: ${info.map((s) => esc(s.name)).join(', ')}</p>
-          <button class="btn primary" id="slice-btn">✂ Нарезать…</button>` :
-    `<p class="small muted">Слайсер не найден. Установите OrcaSlicer (подходит для Bambu, Elegoo и Anycubic) и укажите путь в «Настройках», либо нарежьте модель в своём слайсере и загрузите G-code / 3MF во «Файлы».</p>`}
+        ${info.length ? `<p class="small">FDM: ${info.map((s) => esc(s.name)).join(', ')}</p>
+          <button class="btn primary" id="slice-btn">✂ Нарезать для FDM…</button>` :
+    `<p class="small muted">FDM-слайсер не найден. Установите OrcaSlicer (подходит для Bambu, Elegoo и Anycubic) и укажите путь в «Настройках», либо нарежьте модель в своём слайсере и загрузите G-code / 3MF во «Файлы».</p>`}
+        ${S.info.prusaslicer && S.info.uvtools ? `<p class="small" style="margin-top:10px">Смола: PrusaSlicer + UVtools</p>
+          <button class="btn" id="slice-resin-btn">✂ Нарезать для фотополимера…</button>` :
+    `<p class="small muted" style="margin-top:10px">Для нарезки под фотополимер установите PrusaSlicer и UVtools (бесплатные) — или режьте в Chitubox / Photon Workshop и загружайте готовый файл.</p>`}
       </div>
     </div>
   </div>`;
@@ -774,6 +790,33 @@ async function renderPrepare() {
   };
   const sb = $('#slice-btn');
   if (sb) sb.onclick = () => sliceDialog(id);
+  const rb = $('#slice-resin-btn');
+  if (rb) rb.onclick = () => sliceResinDialog(id);
+}
+
+async function sliceResinDialog(id) {
+  const m = modal('Нарезка для фотополимера (PrusaSlicer + UVtools)', '<p class="muted">Загружаю профили…</p>');
+  const prof = await guard(() => api('/slicer/resin-profiles'));
+  if (!prof) { m.close(); return; }
+  if (!prof.printers.length) { m.el.innerHTML = `<div class="msg err">${esc(prof.error || 'Профили не найдены')}</div>`; return; }
+  const opt = (arr) => arr.map((p) => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join('');
+  m.el.innerHTML = `<div class="form" style="grid-template-columns:1fr">
+    <label class="field">Принтер<select id="r-printer">${opt(prof.printers)}</select></label>
+    <label class="field">Профиль (слой и поддержки)<select id="r-print">${opt(prof.prints)}</select></label></div>
+    <div class="form" style="margin-top:8px">
+      <label class="field">Экспозиция, с<input id="r-exp" type="number" step="0.1" value="2.5"></label>
+      <label class="field">Экспозиция нижних слоёв, с<input id="r-bexp" type="number" step="1" value="25"></label>
+      <label class="field">Нижних слоёв<input id="r-bl" type="number" value="5"></label></div>
+    <p class="small muted">Формат файла (.goo, .ctb, .pwmx, .pm4n…) выбирается автоматически по профилю принтера. Поддержки генерирует PrusaSlicer.</p>
+    <div class="row"><span class="spacer"></span><button class="btn primary" id="go">✂ Нарезать</button></div>`;
+  $('#go', m.el).onclick = async () => {
+    const btn = $('#go', m.el); btn.disabled = true; btn.textContent = 'Нарезаю… (может занять несколько минут)';
+    const r = await guard(() => api(`/library/${id}/slice-resin`, { method: 'POST', json: {
+      printer: $('#r-printer', m.el).value, print: $('#r-print', m.el).value, exposure_s: +$('#r-exp', m.el).value,
+      bottom_exposure_s: +$('#r-bexp', m.el).value, bottom_layers: +$('#r-bl', m.el).value } }));
+    btn.disabled = false; btn.textContent = '✂ Нарезать';
+    if (r) { toast(`Готово: ${fmtDur(r.summary.time_s)}, ${fmtNum(r.summary.material_ml, 1)} мл`, 'ok', 9000); m.close(); setTab('library'); }
+  };
 }
 
 async function sliceDialog(id) {
@@ -789,6 +832,7 @@ async function sliceDialog(id) {
     <label class="field">Принтер<input list="dl-mach" id="mach" placeholder="начните вводить: Bambu Lab A1 0.4 nozzle"><datalist id="dl-mach">${opt(prof.machines)}</datalist></label>
     <label class="field">Профиль печати<input list="dl-proc" id="proc" placeholder="0.20mm Standard"><datalist id="dl-proc">${opt(prof.processes)}</datalist></label>
     <label class="field">Филамент<input list="dl-fil" id="fil" placeholder="Bambu PLA Basic"><datalist id="dl-fil">${opt(prof.filaments)}</datalist></label>
+    <label class="field">Тип стола<select id="bed">${(prof.bed_types || []).map((b) => `<option>${esc(b)}</option>`).join('')}</select></label>
     <label class="row small"><input type="checkbox" id="arrange" checked> авторасстановка</label>
     <label class="row small"><input type="checkbox" id="orient"> автоориентация</label></div>
     <p class="small muted">Можно выбрать из списка или вставить путь к своему .json-профилю, экспортированному из слайсера.</p>
@@ -798,7 +842,8 @@ async function sliceDialog(id) {
     const btn = $('#go', m.el); btn.disabled = true; btn.textContent = 'Нарезаю… (до нескольких минут)';
     const r = await guard(() => api(`/library/${id}/slice`, { method: 'POST', json: {
       machine: resolve($('#mach', m.el).value, prof.machines), process: resolve($('#proc', m.el).value, prof.processes),
-      filaments: [resolve($('#fil', m.el).value, prof.filaments)].filter(Boolean), arrange: $('#arrange', m.el).checked, orient: $('#orient', m.el).checked } }));
+      filaments: [resolve($('#fil', m.el).value, prof.filaments)].filter(Boolean), arrange: $('#arrange', m.el).checked, orient: $('#orient', m.el).checked,
+      bed_type: $('#bed', m.el).value } }));
     btn.disabled = false; btn.textContent = '✂ Нарезать';
     if (r) {
       $('#slog', m.el).textContent = r.log || '';
@@ -993,8 +1038,11 @@ async function renderSettings() {
   </div><div>
     <div class="panel"><h3>Слайсер</h3><div class="form" style="grid-template-columns:1fr">
       <label class="field">Путь к OrcaSlicer / Bambu Studio (пусто — искать автоматически)<input name="slicer_path" value="${esc(s.slicer_path)}" placeholder="C:\\Program Files\\OrcaSlicer\\orca-slicer.exe"></label>
-      <label class="field">Папка профилей (пусто — профили из установки слайсера)<input name="slicer_profiles_dir" value="${esc(s.slicer_profiles_dir)}"></label></div>
-      <p class="small muted">Найдено: ${(S.info.slicers || []).map((x) => esc(x.name + ' — ' + x.path)).join('<br>') || 'ничего'}</p></div>
+      <label class="field">Папка профилей (пусто — профили из установки слайсера)<input name="slicer_profiles_dir" value="${esc(s.slicer_profiles_dir)}"></label>
+      <label class="field">PrusaSlicer (для смолы)<input name="prusaslicer_path" value="${esc(s.prusaslicer_path)}" placeholder="C:\\Program Files\\Prusa3D\\PrusaSlicer\\prusa-slicer-console.exe"></label>
+      <label class="field">UVtoolsCmd (для смолы)<input name="uvtools_path" value="${esc(s.uvtools_path)}"></label></div>
+      <p class="small muted">Найдено: ${(S.info.slicers || []).map((x) => esc(x.name + ' — ' + x.path)).join('<br>') || 'FDM-слайсер не найден'}
+        ${S.info.prusaslicer ? '<br>PrusaSlicer — ' + esc(S.info.prusaslicer) : ''}${S.info.uvtools ? '<br>UVtools — ' + esc(S.info.uvtools) : ''}</p></div>
     <div class="panel"><h3>Сеть и доступ</h3><div class="form">
       <label class="field">Подсеть для поиска<input name="discovery_subnet" value="${esc(s.discovery_subnet)}" placeholder="${esc(S.info.subnet || '192.168.1.0/24')}"></label>
       <label class="field">Кадров камеры в секунду<input name="camera_fps" type="number" step="0.5" value="${s.camera_fps}"></label>

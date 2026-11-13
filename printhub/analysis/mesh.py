@@ -51,6 +51,9 @@ def load_mesh(path_or_bytes: str | bytes, file_type: Optional[str] = None) -> tr
         raise ValueError(f"Неподдерживаемый тип геометрии: {type(obj).__name__}")
     if len(mesh.faces) == 0:
         raise ValueError("Пустая модель")
+    # STL хранит каждый треугольник отдельно — склеиваем совпадающие вершины,
+    # иначе любая модель выглядит как набор отдельных треугольников с «дырами»
+    mesh.merge_vertices(digits_vertex=5)
     return mesh
 
 
@@ -200,6 +203,68 @@ def analyze_mesh(mesh: trimesh.Trimesh, build_volume: Optional[list[float]] = No
 
 # ---------------------------------------------------------------- ремонт
 
+def fill_holes_fan(mesh: trimesh.Trimesh, max_loop: int = 2000) -> int:
+    """Заделывает простые дыры «веером» из центра с правильной ориентацией граней.
+
+    Граничное полуребро u→v принадлежит существующей грани, значит новая грань должна
+    содержать v→u. Неоднозначные (неманифолдные) контуры пропускаются — их чинит MeshFix.
+    """
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if len(faces) == 0:
+        return 0
+    n = int(faces.max()) + 1
+    he = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    key = he[:, 0] * n + he[:, 1]
+    rkey = he[:, 1] * n + he[:, 0]
+    boundary = he[~np.isin(key, rkey)]
+    if len(boundary) == 0:
+        return 0
+    nxt: dict[int, int] = {}
+    ambiguous: set[int] = set()
+    for u, v in boundary.tolist():
+        if u in nxt:
+            ambiguous.add(u)
+        nxt[u] = v
+    verts = [np.asarray(mesh.vertices, dtype=float)]
+    new_faces: list[list[int]] = []
+    next_index = len(mesh.vertices)
+    visited: set[int] = set()
+    filled = 0
+    for start in list(nxt):
+        if start in visited or start in ambiguous:
+            continue
+        loop = [start]
+        visited.add(start)
+        cur = nxt[start]
+        ok = True
+        while cur != start:
+            if cur in visited or cur not in nxt or cur in ambiguous or len(loop) > max_loop:
+                ok = False
+                break
+            loop.append(cur)
+            visited.add(cur)
+            cur = nxt[cur]
+        if not ok or len(loop) < 3:
+            continue
+        if len(loop) == 3:
+            a, b, c = loop
+            new_faces.append([a, c, b])
+        else:
+            center = np.asarray(mesh.vertices)[loop].mean(axis=0)
+            verts.append(center[None, :])
+            ci = next_index
+            next_index += 1
+            for i, u in enumerate(loop):
+                v = loop[(i + 1) % len(loop)]
+                new_faces.append([v, u, ci])
+        filled += 1
+    if not new_faces:
+        return 0
+    mesh.vertices = np.vstack(verts)
+    mesh.faces = np.vstack([faces, np.asarray(new_faces, dtype=np.int64)])
+    return filled
+
+
 @dataclass
 class RepairResult:
     steps: list[str] = field(default_factory=list)
@@ -237,7 +302,7 @@ def repair_mesh(mesh: trimesh.Trimesh, *, aggressive: bool = False, remove_debri
     trimesh.repair.fix_normals(m, multibody=True)
     holes0 = _edge_stats(m)[2]
     if not m.is_watertight:
-        trimesh.repair.fill_holes(m)
+        fill_holes_fan(m)
         holes1 = _edge_stats(m)[2]
         if holes1 < holes0:
             res.steps.append(f"Заделано дыр: {holes0 - holes1}")

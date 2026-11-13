@@ -660,6 +660,10 @@ class GcodeAnalyzer:
             res.filament_mm = sim_mm
         if info.filament_cm3:
             res.filament_cm3 = sum(info.filament_cm3)
+            # Bambu Studio пишет «[cm^3]», но фактически это мм³
+            grams_hint = sum(info.filament_g) if info.filament_g else res.filament_mm * 0.003
+            if grams_hint and res.filament_cm3 > 20 * grams_hint:
+                res.filament_cm3 /= 1000.0
         else:
             res.filament_cm3 = res.filament_mm * math.pi * (diam / 2) ** 2 / 1000.0
         if info.filament_g:

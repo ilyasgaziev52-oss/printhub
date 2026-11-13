@@ -1,4 +1,7 @@
-"""Эмуляторы принтеров для тестов (Elegoo SDCP, Moonraker)."""
+"""Эмуляторы принтеров (Elegoo SDCP, Klipper/Moonraker) — для тестов и демо-режима (--demo).
+
+В режиме simulate печать «идёт»: растут прогресс, слои и температуры, затем задание завершается.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -39,9 +42,13 @@ async def serve_app(app: Any, port: int) -> tuple[uvicorn.Server, asyncio.Task]:
 class SdcpPrinter:
     MBID = "2c9018510147017000002c0000000000"
 
-    def __init__(self) -> None:
-        self.ws_port = free_port()
-        self.http_port = free_port()
+    SIM_TOTAL = 900.0   # длительность «печати», с (в ускоренном времени)
+    SIM_SPEED = 5.0     # во сколько раз быстрее реального времени
+
+    def __init__(self, ws_port: int = 0, http_port: int = 0, simulate: bool = False) -> None:
+        self.ws_port = ws_port or free_port()
+        self.http_port = http_port or free_port()
+        self.simulate = simulate
         self.received: list[dict[str, Any]] = []
         self.uploaded: dict[str, bytearray] = {}
         self.status: dict[str, Any] = {
@@ -57,7 +64,7 @@ class SdcpPrinter:
     def attrs(self) -> dict[str, Any]:
         return {"Attributes": {"Name": "Centauri Carbon", "MachineName": "Centauri Carbon", "BrandName": "ELEGOO",
                                "ProtocolVersion": "V3.0.0", "FirmwareVersion": "V1.1.29", "MainboardID": self.MBID,
-                               "Capabilities": ["FILE_TRANSFER", "PRINT_CONTROL", "VIDEO_STREAM"],
+                               "Capabilities": ["FILE_TRANSFER", "PRINT_CONTROL"],
                                "SupportFileType": ["gcode"]},
                 "MainboardID": self.MBID, "TimeStamp": int(time.time()), "Topic": f"sdcp/attributes/{self.MBID}"}
 
@@ -87,8 +94,12 @@ class SdcpPrinter:
                                           for n, b in self.uploaded.items()]
                 elif cmd == 128:
                     self.status["CurrentStatus"] = [1]
-                    self.status["PrintInfo"].update(Status=13, Filename=d["Data"]["Filename"], TotalLayer=100,
-                                                    CurrentLayer=10, CurrentTicks=60.0, TotalTicks=600.0, Progress=10)
+                    if self.simulate:
+                        self.status["PrintInfo"].update(Status=16, Filename=d["Data"]["Filename"], TotalLayer=150,
+                                                        CurrentLayer=0, CurrentTicks=0.0, TotalTicks=self.SIM_TOTAL, Progress=0)
+                    else:
+                        self.status["PrintInfo"].update(Status=13, Filename=d["Data"]["Filename"], TotalLayer=100,
+                                                        CurrentLayer=10, CurrentTicks=60.0, TotalTicks=600.0, Progress=10)
                 elif cmd == 129:
                     self.status["PrintInfo"]["Status"] = 6
                 elif cmd == 131:
@@ -119,12 +130,39 @@ class SdcpPrinter:
         buf.extend(data)
         return JSONResponse({"code": "000000", "messages": None, "data": {}, "success": True})
 
+    async def _simulate(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            st, pi = self.status, self.status["PrintInfo"]
+            printing = st["CurrentStatus"] == [1] and pi["Status"] in (13, 16)
+            target_n, target_b = (220.0, 60.0) if printing else (0.0, 0.0)
+            st["TempTargetNozzle"], st["TempTargetHotbed"] = target_n, target_b
+            st["TempOfNozzle"] = round(st["TempOfNozzle"] + ((target_n or 25) - st["TempOfNozzle"]) * 0.3, 1)
+            st["TempOfHotbed"] = round(st["TempOfHotbed"] + ((target_b or 24) - st["TempOfHotbed"]) * 0.2, 1)
+            if printing:
+                if pi["Status"] == 16 and st["TempOfNozzle"] > 200:
+                    pi["Status"] = 13
+                if pi["Status"] == 13:
+                    st["CurrentFanSpeed"]["ModelFan"] = 100
+                    pi["CurrentTicks"] = min(pi["CurrentTicks"] + self.SIM_SPEED, pi["TotalTicks"])
+                    frac = pi["CurrentTicks"] / pi["TotalTicks"]
+                    pi["Progress"] = int(frac * 100)
+                    pi["CurrentLayer"] = int(frac * pi["TotalLayer"])
+                    if frac >= 1:
+                        st["CurrentStatus"] = [0]
+                        pi["Status"] = 9
+                        st["CurrentFanSpeed"]["ModelFan"] = 0
+            await self.push_status()
+
     async def start(self) -> None:
         self.ws_server = await websockets.serve(self.handler, "127.0.0.1", self.ws_port)
         app = Starlette(routes=[Route("/uploadFile/upload", self.upload, methods=["POST"])])
         self.http_server, self.http_task = await serve_app(app, self.http_port)
+        self._sim = asyncio.create_task(self._simulate()) if self.simulate else None
 
     async def stop(self) -> None:
+        if self._sim:
+            self._sim.cancel()
         self.ws_server.close()
         self.http_server.should_exit = True
         await self.http_task
@@ -132,8 +170,12 @@ class SdcpPrinter:
 
 # ---------------------------------------------------------------- Moonraker
 class MoonrakerPrinter:
-    def __init__(self) -> None:
-        self.port = free_port()
+    SIM_TOTAL = 1200.0
+    SIM_SPEED = 6.0
+
+    def __init__(self, port: int = 0, simulate: bool = False) -> None:
+        self.port = port or free_port()
+        self.simulate = simulate
         self.calls: list[str] = []
         self.files: dict[str, bytes] = {}
         self.state: dict[str, Any] = {
@@ -177,12 +219,20 @@ class MoonrakerPrinter:
             return JSONResponse({"result": {"item": {"path": f.filename}}})  # type: ignore[union-attr]
 
         async def metadata(r: Request) -> JSONResponse:
-            return JSONResponse({"result": {"estimated_time": 600}})
+            return JSONResponse({"result": {"estimated_time": self.SIM_TOTAL if self.simulate else 600}})
+
+        async def webcams(r: Request) -> JSONResponse:
+            return JSONResponse({"result": {"webcams": []}})
 
         async def start(r: Request) -> JSONResponse:
             self.calls.append("start:" + r.query_params["filename"])
-            await self.notify({"print_stats": {"state": "printing", "filename": r.query_params["filename"], "print_duration": 30},
-                               "display_status": {"progress": 0.05}})
+            if self.simulate:
+                await self.notify({"print_stats": {"state": "printing", "filename": r.query_params["filename"], "print_duration": 0,
+                                                   "info": {"current_layer": 0, "total_layer": 200}},
+                                   "display_status": {"progress": 0.0}})
+            else:
+                await self.notify({"print_stats": {"state": "printing", "filename": r.query_params["filename"], "print_duration": 30},
+                                   "display_status": {"progress": 0.05}})
             return JSONResponse({"result": "ok"})
 
         async def pause(r: Request) -> JSONResponse:
@@ -221,14 +271,40 @@ class MoonrakerPrinter:
             Route("/server/info", server_info), Route("/printer/info", printer_info),
             Route("/printer/objects/list", objects_list), Route("/server/files/list", files_list),
             Route("/server/files/upload", upload, methods=["POST"]), Route("/server/files/metadata", metadata),
+            Route("/server/webcams/list", webcams),
             Route("/printer/print/start", start, methods=["POST"]), Route("/printer/print/pause", pause, methods=["POST"]),
             Route("/printer/print/resume", resume, methods=["POST"]), Route("/printer/print/cancel", cancel, methods=["POST"]),
             Route("/printer/gcode/script", gcode, methods=["POST"]), WebSocketRoute("/websocket", ws_endpoint),
         ])
 
+    async def _simulate(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            ps = self.state["print_stats"]
+            printing = ps["state"] == "printing"
+            ext, bed = self.state["extruder"], self.state["heater_bed"]
+            ext["target"], bed["target"] = (210.0, 60.0) if printing else (0.0, 0.0)
+            ext["temperature"] = round(ext["temperature"] + ((ext["target"] or 25) - ext["temperature"]) * 0.3, 1)
+            bed["temperature"] = round(bed["temperature"] + ((bed["target"] or 24) - bed["temperature"]) * 0.2, 1)
+            diff: dict[str, Any] = {"extruder": dict(ext), "heater_bed": dict(bed)}
+            if printing and ext["temperature"] > 190:
+                ps["print_duration"] = min(ps["print_duration"] + self.SIM_SPEED, self.SIM_TOTAL)
+                frac = ps["print_duration"] / self.SIM_TOTAL
+                ps["info"] = {"current_layer": int(frac * 200), "total_layer": 200}
+                diff["print_stats"] = {"print_duration": ps["print_duration"], "info": ps["info"]}
+                diff["display_status"] = {"progress": round(frac, 4)}
+                diff["fan"] = {"speed": 1.0}
+                if frac >= 1:
+                    diff["print_stats"]["state"] = "complete"
+                    diff["fan"] = {"speed": 0.0}
+            await self.notify(diff)
+
     async def start(self) -> None:
         self.server, self.task = await serve_app(self.app(), self.port)
+        self._sim = asyncio.create_task(self._simulate()) if self.simulate else None
 
     async def stop(self) -> None:
+        if self._sim:
+            self._sim.cancel()
         self.server.should_exit = True
         await self.task

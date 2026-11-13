@@ -46,7 +46,7 @@ BAMBU = """; HEADER_BLOCK_START
 ; model printing time: 1h 2m 3s; total estimated time: 1h 10m 5s
 ; total layer number: 150
 ; total filament length [mm] : 5000.00
-; total filament volume [cm^3] : 12.03
+; total filament volume [cm^3] : 12030.00
 ; total filament weight [g] : 14.91
 ; filament_density: 1.24
 ; filament_diameter: 1.75
@@ -86,6 +86,7 @@ def test_bambu_header():
     assert r.layers == 150
     assert r.filament_g == 14.91
     assert r.filament_mm == 5000.0
+    assert r.filament_cm3 == 12.03  # в заголовке мм³ под видом см³
     assert r.slicer.slicer == "BambuStudio"
 
 

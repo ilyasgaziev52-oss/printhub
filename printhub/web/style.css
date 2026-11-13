@@ -68,6 +68,7 @@ h3 { font-size: 15px; margin: 0 0 10px; }
   box-shadow: var(--shadow); padding: 14px;
 }
 .panel + .panel { margin-top: 14px; }
+.grid > .panel { margin-top: 0; }
 .cols { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
 @media (max-width: 900px) { .cols { grid-template-columns: minmax(0, 1fr); } }
 
@@ -79,7 +80,7 @@ button.btn, a.btn, label.btn {
 button.btn:hover { border-color: var(--accent); }
 button.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 button.btn.danger { color: var(--err); }
-button.btn.small { padding: 3px 8px; min-height: 26px; font-size: 12px; }
+.btn.small { padding: 3px 8px; min-height: 26px; font-size: 12px; }
 button.btn:disabled { opacity: .45; cursor: not-allowed; }
 input, select, textarea {
   font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border);
@@ -127,6 +128,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .thumb { width: 48px; height: 48px; object-fit: contain; border-radius: 6px; background: var(--panel-2); display: block; }
 
 .drop {
+  display: block;
   border: 2px dashed var(--border); border-radius: var(--radius); padding: 22px; text-align: center; color: var(--muted);
   cursor: pointer; background: var(--panel);
 }

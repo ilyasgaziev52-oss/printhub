@@ -24,7 +24,7 @@ PORT_HINTS: dict[int, list[str]] = {
     7125: ["moonraker"],
     1883: ["elegoo_cc2"],
     6000: ["anycubic_photon"],
-    9883: ["anycubic_lan"],
+    18910: ["anycubic_lan"],
     80: ["octoprint", "moonraker"],
 }
 

@@ -5,3 +5,5 @@ data/
 *.egg-info/
 .venv/
 venv/
+data-demo/
+dist/
