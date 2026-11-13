@@ -1,0 +1,10 @@
+[project]
+name = "printhub"
+version = "0.1.0"
+description = "Управление 3D-принтерами Bambu Lab, Elegoo, Anycubic и Klipper в локальной сети"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
