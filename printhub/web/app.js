@@ -123,6 +123,10 @@ function connectWs() {
     } else if (m.type === 'transfer') {
       S.transfers[m.transfer.id] = m.transfer;
       onTransfer(m.transfer);
+    } else if (m.type === 'update') {
+      S.update = m.update;
+      renderUpdateBar();
+      if (S.tab === 'settings') renderUpdatePanel();
     } else if (m.type === 'toast') {
       toast(m.text, m.level === 'error' ? 'error' : 'info', 10000);
     } else if (m.type === 'library_changed' && S.tab === 'library') {
@@ -1016,6 +1020,66 @@ function editMaterial(mt) {
   };
 }
 
+// ------------------------------------------------------------------ обновления
+const UPD_STATUS = {
+  idle: 'ожидание', checking: 'проверка…', available: 'доступна новая версия', downloading: 'загрузка…',
+  ready: 'загружено, устанавливается', waiting: 'ждём окончания передачи файлов', installing: 'установка… программа перезапустится',
+  up_to_date: 'установлена последняя версия', error: 'ошибка', disabled: 'источник обновлений не настроен',
+};
+
+function renderUpdateBar() {
+  const u = S.update || {};
+  let bar = $('#update-bar');
+  const show = ['downloading', 'ready', 'waiting', 'installing'].includes(u.status) || (u.status === 'available' && u.installed);
+  if (!show) {
+    if (bar) bar.style.display = 'none';
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.className = 'msg';
+    bar.style.cssText = 'margin:0;border-radius:0;text-align:center';
+    document.body.insertBefore(bar, $('main'));
+  }
+  bar.style.display = '';
+  bar.textContent = u.status === 'downloading' ? `⬇ Загружается обновление ${u.latest}: ${fmtNum(u.progress, 0)}%`
+    : u.status === 'installing' ? `🔄 Устанавливается версия ${u.latest}. Страница обновится сама через минуту.`
+      : u.status === 'waiting' ? `⏳ Обновление ${u.latest} установится после окончания передачи файлов`
+        : `✨ Доступна версия ${u.latest} — установится автоматически`;
+  if (u.status === 'installing' && !S.reloadPlanned) {
+    S.reloadPlanned = true;
+    setTimeout(() => location.reload(), 60000);
+  }
+}
+
+function renderUpdatePanel() {
+  const el = $('#update-panel');
+  if (!el) return;
+  const u = S.update || {};
+  el.innerHTML = `<div class="kv">
+      <span>Установлена</span><span><b>${esc(u.current || S.info.version || '')}</b>${u.installed ? '' : ' (запуск из исходников — автоустановка отключена)'}</span>
+      <span>Последняя</span><span>${esc(u.latest || '—')}</span>
+      <span>Статус</span><span>${esc(UPD_STATUS[u.status] || u.status || '—')}${u.status === 'downloading' ? ' ' + fmtNum(u.progress, 0) + '%' : ''}</span>
+      <span>Проверено</span><span>${u.last_check ? fmtDate(u.last_check) : '—'}</span>
+      <span>Источник</span><span class="small">${esc(u.source || '—')}</span></div>
+    ${u.error ? `<div class="msg err">${esc(u.error)}</div>` : ''}
+    ${u.notes && u.status === 'available' ? `<details style="margin-top:8px"><summary class="small">Что нового</summary><pre class="small" style="white-space:pre-wrap">${esc(u.notes)}</pre></details>` : ''}
+    <div class="row" style="margin-top:10px"><button class="btn" id="upd-check">Проверить обновления</button>
+      ${u.installed && ['available', 'ready', 'error'].includes(u.status) ? '<button class="btn primary" id="upd-install">Обновить сейчас</button>' : ''}</div>`;
+  $('#upd-check').onclick = async () => {
+    const r = await guard(() => api('/update/check', { method: 'POST' }));
+    if (r) { S.update = r; renderUpdatePanel(); renderUpdateBar(); }
+  };
+  const ib = $('#upd-install');
+  if (ib) {
+    ib.onclick = async () => {
+      const r = await guard(() => api('/update/install', { method: 'POST' }));
+      if (r) { S.update = r; renderUpdatePanel(); renderUpdateBar(); }
+    };
+  }
+}
+
 // ------------------------------------------------------------------ настройки
 async function renderSettings() {
   S.settings = await api('/settings');
@@ -1048,12 +1112,17 @@ async function renderSettings() {
       <label class="field">Кадров камеры в секунду<input name="camera_fps" type="number" step="0.5" value="${s.camera_fps}"></label>
       <label class="field">Пароль на вход (пусто — без пароля)<input name="auth_password" type="password" value="${esc(s.auth_password)}"></label></div>
       <p class="small muted">Пароль рекомендуется, если интерфейс открыт для всех устройств в сети. Логин — любой.</p></div>
+    <div class="panel"><h3>Обновления</h3><div id="update-panel"></div>
+      <label class="row small" style="margin-top:10px"><input type="checkbox" name="auto_update" ${s.auto_update !== false ? 'checked' : ''}> устанавливать обновления автоматически</label>
+      <details style="margin-top:8px"><summary class="small muted">Источник обновлений</summary><div class="form" style="grid-template-columns:1fr;margin-top:8px">
+        <label class="field">Репозиторий GitHub (владелец/имя)<input name="update_repo" value="${esc(s.update_repo || '')}" placeholder="из сборки"></label>
+        <label class="field">или адрес JSON-манифеста<input name="update_url" value="${esc(s.update_url || '')}"></label></div></details></div>
     <div class="panel small muted">PrintHub ${esc(S.info.version || '')} · данные: <code>${esc(S.info.data_dir || '')}</code></div>
   </div></div>
   <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" id="save">Сохранить</button></div>`;
   $('#save').onclick = async () => {
     const body = {};
-    $$('#main [name]').forEach((el) => { body[el.name] = el.type === 'number' ? +el.value : el.value; });
+    $$('#main [name]').forEach((el) => { body[el.name] = el.type === 'number' ? +el.value : el.type === 'checkbox' ? el.checked : el.value; });
     body.notify_events = $$('[data-ev]').filter((c) => c.checked).map((c) => c.dataset.ev);
     if (await guard(() => api('/settings', { method: 'PUT', json: body }), 'Настройки сохранены')) {
       S.info = await api('/info');
@@ -1064,6 +1133,8 @@ async function renderSettings() {
     const r = await guard(() => api('/settings/test-telegram', { method: 'POST' }));
     if (r) toast(r.ok ? 'Сообщение отправлено' : 'Не удалось — проверьте токен и Chat ID (и что вы написали боту /start)', r.ok ? 'ok' : 'error');
   };
+  S.update = await api('/update').catch(() => S.update);
+  renderUpdatePanel();
 }
 
 // ------------------------------------------------------------------ старт
@@ -1071,6 +1142,8 @@ async function renderSettings() {
   try {
     [S.info, S.drivers, S.settings] = await Promise.all([api('/info'), api('/drivers'), api('/settings')]);
     setPrinters(await api('/printers'));
+    S.update = S.info.update;
+    renderUpdateBar();
   } catch (e) { toast('Сервер недоступен: ' + e.message, 'error'); }
   connectWs();
   setTab(S.tab);

@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
-from .analysis import mesh as meshmod
+from .analysis.lazy import mesh as meshmod
 from .analysis.gcode import GcodeAnalyzer
 from .analysis.threemf import analyze_3mf
 
@@ -21,7 +21,7 @@ GCODE_EXT = (".gcode", ".gco", ".g", ".gc")
 RESIN_EXT = (".goo", ".ctb", ".cbddlp", ".photon", ".pwmx", ".pwma", ".pwms", ".pwmo", ".pws", ".pw0",
              ".pwx", ".pwmb", ".pm3", ".pm3m", ".pm3r", ".pm4n", ".pm4u", ".pm5", ".pm5s", ".pm7", ".pm7m",
              ".pwc", ".pwsz", ".prz", ".jxs", ".zip", ".sl1", ".sl1s")
-MESH_EXT = meshmod.SUPPORTED_MESH_EXT
+MESH_EXT = (".stl", ".obj", ".3mf", ".ply", ".off", ".glb", ".gltf")
 
 
 def safe_filename(name: str) -> str:

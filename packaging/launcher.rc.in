@@ -1,0 +1,25 @@
+#include <winver.h>
+1 ICON "printhub.ico"
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @V1@,@V2@,@V3@,0
+PRODUCTVERSION @V1@,@V2@,@V3@,0
+FILEOS VOS__WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "041904B0"
+    BEGIN
+      VALUE "CompanyName", "PrintHub"
+      VALUE "FileDescription", "PrintHub - 3D printer manager"
+      VALUE "FileVersion", "@VERSION@"
+      VALUE "ProductName", "PrintHub"
+      VALUE "ProductVersion", "@VERSION@"
+      VALUE "OriginalFilename", "PrintHub.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x419, 1200
+  END
+END

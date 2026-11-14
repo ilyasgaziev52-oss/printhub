@@ -92,6 +92,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "auth_password": "",
     "discovery_subnet": "",            # например 192.168.1.0/24; пусто — автоопределение
     "camera_fps": 2,
+    "auto_update": True,               # обновляться автоматически (установленная версия)
+    "update_repo": "",                 # свой репозиторий GitHub с релизами (если пусто — из сборки)
+    "update_url": "",                  # или адрес JSON-манифеста
 }
 
 

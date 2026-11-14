@@ -1,0 +1,55 @@
+# Выпуск новой версии: git tag v0.2.1 && git push origin v0.2.1
+# Собирает PrintHub-Setup-<версия>.exe и публикует релиз GitHub.
+# Установленные копии PrintHub находят этот релиз и обновляются сами.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия (например 0.2.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Инструменты сборки
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 unzip
+          pip install -r requirements-dev.txt pillow
+
+      - name: Тесты
+        run: pytest -q
+
+      - name: Версия
+        id: v
+        run: |
+          V="${{ github.event.inputs.version }}"
+          [ -z "$V" ] && V="${GITHUB_REF_NAME#v}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Сборка установщика
+        env:
+          UPDATE_REPO: ${{ github.repository }}
+        run: ./packaging/build_windows.sh "${{ steps.v.outputs.version }}"
+
+      - name: Публикация релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          gh release create "v$V" "dist/PrintHub-Setup-$V.exe" "dist/PrintHub-Setup-$V.exe.sha256" \
+            --title "PrintHub $V" --generate-notes

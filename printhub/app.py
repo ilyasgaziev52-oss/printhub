@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .analysis import mesh as meshmod
+from .analysis.lazy import mesh as meshmod
 from .analysis.cost import calc_cost
 from .db import Database
 from .discovery import default_subnet, discover_all
@@ -53,12 +53,21 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         from .demo import Demo
         demo_obj = Demo(db, data)
 
+    from .updater import Updater
+
+    updater = Updater(data, db.get_settings,
+                      is_busy=lambda: any(t.get("status") in ("uploading", "starting") for t in mgr.transfers.values()),
+                      broadcast=mgr.broadcast)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ANN202
         if demo_obj:
             await demo_obj.start()
         await mgr.start()
+        if not demo:
+            updater.start()
         yield
+        await updater.stop()
         await mgr.stop()
         if demo_obj:
             await demo_obj.stop()
@@ -66,12 +75,27 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
     app = FastAPI(title="PrintHub", version=__version__, lifespan=lifespan)
     app.state.db = db
     app.state.mgr = mgr
+    app.state.updater = updater
 
     # ------------------------------------------------------------------ авторизация (опционально)
+    app.state.shutdown_token = ""
+    app.state.request_shutdown = None
+
+    @app.post("/api/system/shutdown", include_in_schema=False)
+    async def system_shutdown(request: Request) -> dict[str, Any]:
+        tok = app.state.shutdown_token
+        host = request.client.host if request.client else ""
+        if not tok or host not in ("127.0.0.1", "::1") or \
+                not secrets.compare_digest(request.headers.get("x-shutdown-token", ""), tok):
+            raise HTTPException(403, "Запрещено")
+        if app.state.request_shutdown:
+            app.state.request_shutdown()
+        return {"ok": True}
+
     @app.middleware("http")
     async def auth_mw(request: Request, call_next):  # noqa: ANN001, ANN202
         pwd = db.get_settings().get("auth_password") or ""
-        if pwd:
+        if pwd and request.url.path != "/api/system/shutdown":
             hdr = request.headers.get("authorization", "")
             ok = False
             if hdr.lower().startswith("basic "):
@@ -105,6 +129,7 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
     async def info() -> dict[str, Any]:
         s = db.get_settings()
         return {"version": __version__, "data_dir": str(data), "subnet": default_subnet(),
+                "update": dict(updater.state),
                 "slicers": slicermod.find_slicers(s.get("slicer_path", "")),
                 "prusaslicer": slicermod.find_prusaslicer(s.get("prusaslicer_path", "")),
                 "uvtools": slicermod.find_uvtools(s.get("uvtools_path", ""))}
@@ -661,6 +686,30 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         except Exception as e:  # noqa: BLE001
             db.update_queue(qid, status="queued")
             raise err(e) from e
+
+    # ------------------------------------------------------------------ обновления
+    @app.get("/api/update")
+    async def update_state() -> dict[str, Any]:
+        return dict(updater.state)
+
+    @app.post("/api/update/check")
+    async def update_check() -> dict[str, Any]:
+        return dict(await updater.check())
+
+    @app.post("/api/update/install")
+    async def update_install() -> dict[str, Any]:
+        if updater.state.get("status") not in ("available", "ready", "waiting", "error"):
+            await updater.check()
+        if updater.state.get("status") == "up_to_date":
+            return dict(updater.state)
+        if not updater.state.get("installed"):
+            raise HTTPException(400, "Автоустановка работает в версии, установленной через PrintHub-Setup.exe")
+        try:
+            await updater.download()
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, str(e)) from e
+        asyncio.create_task(updater.install_when_safe())
+        return dict(updater.state)
 
     # ------------------------------------------------------------------ настройки
     @app.get("/api/settings")
