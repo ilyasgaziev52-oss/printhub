@@ -51,6 +51,12 @@ DEV_MODE_HELP = ("Управление печатью недоступно: на
                  "разработчика» (Настройки → Сеть). Статус, свет и камера работают и так.")
 
 
+FTP_530_HELP = ("Принтер отклонил вход по FTP (код 530), поэтому список файлов и загрузка недоступны. "
+                "Проверьте: 1) в принтере стоит microSD-карта — без неё файлы хранить негде; "
+                "2) код доступа актуальный — он меняется при включении/выключении «LAN Only», "
+                "сверьте его на экране (Настройки → Сеть) и обновите в настройках принтера в PrintHub.")
+
+
 def model_from(code: str = "", serial: str = "") -> str:
     if code in DEV_MODELS:
         return DEV_MODELS[code]
@@ -514,10 +520,34 @@ class BambuDriver(PrinterDriver):
     # ------------------------------------------------------------------ FTPS
     def _ftp_connect(self) -> _ImplicitFTP:
         ftp = _ImplicitFTP(context=_tls_ctx())
-        ftp.connect(self.cfg.host, 990, timeout=30)
-        ftp.login("bblp", self.cfg.access_code)
+        try:
+            ftp.connect(self.cfg.host, 990, timeout=30)
+        except OSError as e:
+            raise DriverError(f"Нет связи с FTP принтера (порт 990): {e}") from e
+        try:
+            ftp.login("bblp", self.cfg.access_code)
+        except ftplib.error_perm as e:
+            ftp.close()
+            if str(e).startswith("530"):
+                raise DriverError(FTP_530_HELP) from e
+            raise DriverError(f"FTP отказал: {e}") from e
         ftp.prot_p()
         return ftp
+
+    def check_ftp(self) -> str:
+        """Пустая строка — FTP работает, иначе текст проблемы."""
+        try:
+            ftp = self._ftp_connect()
+            try:
+                ftp.voidcmd("NOOP")
+            finally:
+                try:
+                    ftp.quit()
+                except ftplib.all_errors:
+                    ftp.close()
+            return ""
+        except (DriverError, ftplib.all_errors, OSError) as e:  # type: ignore[misc]
+            return str(e)
 
     async def upload(self, local_path: str, remote_name: str,
                      progress: Optional[ProgressCallback] = None) -> str:
@@ -672,8 +702,15 @@ class BambuDriver(PrinterDriver):
                     break
             res = {"ok": True, "serial": self.serial, "model": f"Bambu Lab {self.model}".strip(),
                    "firmware": self.status.firmware, "developer_mode": self.dev_mode}
+            warnings = []
             if self.dev_mode is False:
-                res["warning"] = DEV_MODE_HELP
+                warnings.append(DEV_MODE_HELP)
+            ftp_problem = await asyncio.to_thread(self.check_ftp)
+            res["ftp_ok"] = not ftp_problem
+            if ftp_problem:
+                warnings.append(ftp_problem)
+            if warnings:
+                res["warning"] = " ".join(warnings)
             return res
         finally:
             await self.close()

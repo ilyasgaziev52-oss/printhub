@@ -293,8 +293,13 @@ function showCamera(id, on) {
 async function showPrinterFiles(id) {
   const p = S.printers[id];
   const m = modal(`Файлы на принтере — ${p.config.name}`, '<p class="muted">Загрузка…</p>');
-  const files = await guard(() => api(`/printers/${id}/files`));
-  if (!files) { m.el.innerHTML = '<p class="msg err">Не удалось получить список файлов</p>'; return; }
+  let files;
+  try {
+    files = await api(`/printers/${id}/files`);
+  } catch (e) {
+    m.el.innerHTML = `<p class="msg err">Не удалось получить список файлов.<br>${esc(e.message || e)}</p>`;
+    return;
+  }
   if (!files.length) { m.el.innerHTML = '<p class="muted">Файлов нет</p>'; return; }
   m.el.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Файл</th><th class="num">Размер</th><th>Дата</th><th></th></tr></thead><tbody>
     ${files.map((f, i) => `<tr><td style="overflow-wrap:anywhere">${esc(f.path)}</td><td class="num">${fmtSize(f.size)}</td><td>${fmtDate(f.modified)}</td>
