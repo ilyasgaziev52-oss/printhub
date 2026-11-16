@@ -354,3 +354,74 @@ async def slice_resin(prusaslicer: str, uvtools: str, model_path: str, *, printe
     if not produced:
         raise ValueError("UVtools не создал файл (проверьте FILEFORMAT_ в профиле принтера):\n" + logs[-1][-1500:])
     return str(produced[0]), "\n".join(logs)
+
+
+# ---------------------------------------------------------------- автоподбор профилей
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def _compatible(path: str) -> list[str]:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    comp = data.get("compatible_printers") or []
+    return comp if isinstance(comp, list) else []
+
+
+def auto_profiles(slicer_path: str, profiles_dir: str, printer_model: str,
+                  material: str = "PLA") -> dict[str, Any]:
+    """Подбирает профили принтера, печати и филамента по названию модели принтера."""
+    prof = list_profiles(slicer_path, profiles_dir)
+    if prof.get("error") and not prof["machines"]:
+        return {"error": prof["error"]}
+    model = _norm(printer_model)
+    if not model:
+        return {"error": "У принтера не указана модель — выберите профили вручную"}
+    machine = None
+    for m in prof["machines"]:  # точное совпадение «<модель> 0.4 nozzle»
+        if _norm(m["name"]) == f"{model} 0 4 nozzle":
+            machine = m
+            break
+    if machine is None:
+        cands = [m for m in prof["machines"] if _norm(m["name"]).startswith(model + " ")
+                 and re.fullmatch(r"0 4( nozzle)?", _norm(m["name"])[len(model):].strip())]
+        machine = cands[0] if cands else None
+    if machine is None:
+        return {"error": f"Не найден профиль принтера для «{printer_model}» — выберите вручную"}
+    mname = machine["name"]
+    procs = [p for p in prof["processes"] if mname in _compatible(p["path"])]
+    process = (next((p for p in procs if "0.20mm standard" in p["name"].lower()), None)
+               or next((p for p in procs if "0.20mm" in p["name"].lower()), None)
+               or (procs[0] if procs else None))
+    if process is None:
+        return {"error": f"Не найден профиль печати для «{mname}» — выберите вручную"}
+    mat = material.upper()
+    fils = [f for f in prof["filaments"] if mat in f["name"].upper()]
+    compat = [f for f in fils if mname in _compatible(f["path"])]
+    pick = compat or [f for f in fils if not _compatible(f["path"])]
+    filament = (next((f for f in pick if "basic" in f["name"].lower() or "generic" in f["name"].lower()), None)
+                or (pick[0] if pick else None))
+    bed = "Textured PEI Plate" if printer_model.lower().startswith("bambu") else ""
+    return {"machine": machine, "process": process, "filament": filament, "bed_type": bed}
+
+
+def auto_resin_profiles(uvtools_path: str, override_dir: str, printer_model: str) -> dict[str, Any]:
+    prof = resin_profiles(uvtools_path, override_dir)
+    if prof.get("error"):
+        return {"error": prof["error"]}
+    words = set(_norm(printer_model).split())
+    best, score = None, 0
+    for p in prof["printers"]:
+        s = len(words & set(_norm(p["name"]).split()))
+        if s > score:
+            best, score = p, s
+    if not best or score < 2:
+        return {"error": f"Не найден профиль смолы для «{printer_model}» — выберите вручную"}
+    prints = prof["prints"]
+    pr = (next((p for p in prints if "0.05" in p["name"] and "medium" in p["name"].lower()), None)
+          or next((p for p in prints if "0.05" in p["name"]), None) or (prints[0] if prints else None))
+    if not pr:
+        return {"error": "Не найдены профили печати смолы"}
+    return {"printer": best, "print": pr}

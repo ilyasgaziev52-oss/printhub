@@ -443,21 +443,31 @@ def suggest_orientations(mesh: trimesh.Trimesh, goal: str = "balanced", top: int
           contact — максимум площади на столе; height — минимальная высота (быстрее).
     """
     hull = mesh.convex_hull
-    facets_area = hull.facets_area
-    order = np.argsort(facets_area)[::-1][:24]
+    facets_area = np.asarray(hull.facets_area)
+    limit = 200 if len(mesh.faces) < 300_000 else 60
+    order = np.argsort(facets_area)[::-1][:limit]
+    fn = np.asarray(mesh.face_normals)
+    fa = np.asarray(mesh.area_faces)
+    tri = np.asarray(mesh.triangles)
+    verts = np.asarray(mesh.vertices)
+    thr = math.sin(math.radians(overhang_angle))
     candidates: list[Orientation] = []
     seen: list[np.ndarray] = []
     for idx in order:
-        normal = hull.facets_normal[idx]
+        normal = np.asarray(hull.facets_normal[idx], dtype=float)
         if any(np.dot(normal, s) > 0.999 for s in seen):
             continue
         seen.append(normal)
+        # грань оболочки кладём на стол: новая высота точки v = -(v·n)
+        d = verts @ normal
+        top_plane = d.max()
+        h = float(top_plane - d.min())
+        dots = fn @ normal                     # новая z-нормаль грани = -dots
+        tri_d = tri @ normal                   # (F, 3)
+        on_bed = (dots > 0.99) & np.all(np.abs(tri_d - top_plane) < 0.05, axis=1)
+        over = float(fa[(dots > thr) & ~on_bed].sum())
+        contact = float(fa[on_bed].sum())
         T = _align_to_down(normal)
-        m = mesh.copy()
-        m.apply_transform(T)
-        m.apply_translation([0, 0, -m.bounds[0][2]])
-        over, contact = overhang_stats(m, overhang_angle)
-        h = float(m.extents[2])
         candidates.append(Orientation(T.tolist(), round(contact / 100, 3), round(over / 100, 3), round(h, 2), 0.0))
     if not candidates:
         return []
@@ -556,3 +566,81 @@ def estimate_resin_from_mesh(mesh: trimesh.Trimesh, p: ResinEstimateParams) -> d
         "time_s": round(time_s),
         "note": "Время фотополимерной печати зависит только от высоты, а не от количества моделей на платформе.",
     }
+
+
+# ---------------------------------------------------------------- автоподготовка
+@dataclass
+class PrepareOptions:
+    repair: bool = True
+    aggressive: bool = False
+    merge_bodies: bool = True
+    orient: str = "auto"          # auto — только если текущая ориентация явно хуже; none; balanced/supports/contact/height
+    fit_rotate: bool = True       # развернуть по Z, если иначе не помещается
+    scale_to_fit: bool = False    # уменьшить, если не помещается даже с поворотом
+    overhang_angle: float = 45.0
+
+
+def auto_prepare(mesh: trimesh.Trimesh, build_volume: Optional[list[float]],
+                 o: PrepareOptions) -> tuple[trimesh.Trimesh, list[dict[str, Any]], MeshReport]:
+    """Ремонт → ориентация → вписывание в стол → центрирование. Возвращает (меш, шаги, итоговый отчёт)."""
+    steps: list[dict[str, Any]] = []
+
+    def step(name: str, ok: bool, detail: str) -> None:
+        steps.append({"step": name, "ok": ok, "detail": detail})
+
+    m = mesh
+    before = analyze_mesh(m, build_volume, o.overhang_angle)
+    if o.repair:
+        geom_errors = [i for i in before.issues if i.severity == "error" and i.code != "too_big"]
+        if not geom_errors and before.bodies <= 1 and not before.degenerate_faces and not before.duplicate_faces:
+            step("Проверка модели", True, "ошибок не найдено")
+        else:
+            m, res = repair_mesh(m, aggressive=o.aggressive, merge_bodies=o.merge_bodies and before.bodies > 1,
+                                 build_volume=build_volume)
+            ok = bool(res.after and res.after.watertight)
+            step("Исправление модели", ok, "; ".join(res.steps) if ok else
+                 "; ".join(res.steps) + ". Модель осталась незамкнутой — попробуйте «Глубокий ремонт»")
+    if before.units_hint:
+        step("Единицы измерения", False, before.units_hint)
+
+    if o.orient != "none":
+        goal = "balanced" if o.orient == "auto" else o.orient
+        opts = suggest_orientations(m, goal=goal, top=1, overhang_angle=o.overhang_angle)
+        if opts:
+            best = opts[0]
+            cur_over, cur_contact = overhang_stats(place_on_bed(m.copy()), o.overhang_angle)
+            cur_over, cur_contact = cur_over / 100, cur_contact / 100
+            worse = (cur_contact < 0.3 * best.contact_cm2) or (cur_over > 1.5 * best.overhang_cm2 + 1.0)
+            if o.orient != "auto" or worse:
+                m.apply_transform(np.array(best.matrix))
+                step("Ориентация", True, f"модель положена на грань: контакт со столом {best.contact_cm2} см², "
+                                         f"нависания {best.overhang_cm2} см²")
+            else:
+                step("Ориентация", True, "текущая ориентация подходит — оставлена как есть")
+
+    if build_volume and all(v > 0 for v in build_volume):
+        bv = np.array(build_volume, dtype=float)
+
+        def fits() -> bool:
+            return bool(np.all(m.extents <= bv + 1e-6))
+        if not fits() and o.fit_rotate:
+            for ang in (90, 45, 30, 60):
+                trial = rotate_mesh(m.copy(), z=ang)
+                if np.all(trial.extents <= bv + 1e-6):
+                    m = trial
+                    step("Размещение", True, f"модель развёрнута на {ang}°, чтобы поместиться на стол")
+                    break
+        if not fits():
+            if o.scale_to_fit:
+                k = float(np.min(bv / np.maximum(m.extents, 1e-9))) * 0.98
+                scale_mesh(m, k)
+                step("Масштаб", True, f"модель уменьшена до {k * 100:.0f}%, чтобы поместиться")
+            else:
+                ext = " × ".join(f"{v:.0f}" for v in m.extents)
+                step("Размещение", False, f"модель {ext} мм не помещается в область печати "
+                                          f"{' × '.join(f'{v:.0f}' for v in bv)} мм — включите «Уменьшить, если не помещается»")
+    place_on_bed(m, build_volume[:2] if build_volume and any(build_volume) else None)
+    rep = analyze_mesh(m, build_volume, o.overhang_angle)
+    if rep.overhang_pct > 5:
+        step("Поддержки", True, f"нависания {rep.overhang_pct}% поверхности — слайсер добавит поддержки")
+    return m, steps, rep

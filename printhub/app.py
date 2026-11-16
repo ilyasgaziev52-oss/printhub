@@ -566,6 +566,81 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         await mgr.broadcast({"type": "library_changed"})
         return {"item_id": new["id"], "summary": summarize_analysis(analysis), "log": log_text[-4000:]}
 
+    @app.post("/api/library/{lid}/prepare")
+    async def prepare_item(lid: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """Одна кнопка: ремонт → ориентация → размещение → нарезка под выбранный принтер."""
+        it, m = await asyncio.to_thread(load_item_mesh, lid)
+        cfg = db.get_printer(body.get("printer_id", "")) if body.get("printer_id") else None
+        bv = cfg.build_volume if cfg and any(cfg.build_volume) else None
+        o = body.get("options") or {}
+        popts = meshmod.PrepareOptions(**{k: v for k, v in o.items() if k in meshmod.PrepareOptions.__dataclass_fields__})
+        try:
+            m2, steps, rep = await asyncio.to_thread(meshmod.auto_prepare, m, bv, popts)
+        except Exception as e:  # noqa: BLE001
+            raise err(e) from e
+        new = await asyncio.to_thread(save_mesh_version, it, m2, "_ready", False, bv)
+        result: dict[str, Any] = {"steps": steps, "mesh_item_id": new["id"], "report": rep.to_dict(),
+                                  "printable": rep.printable, "sliced_item_id": None, "summary": None}
+        await mgr.broadcast({"type": "library_changed"})
+        if not rep.printable or o.get("slice") is False:
+            return result
+        s = db.get_settings()
+        tech = cfg.technology if cfg else "fdm"
+        model = (cfg.model if cfg else "") or ""
+        try:
+            if tech == "resin":
+                uv = slicermod.find_uvtools(s.get("uvtools_path", ""))
+                ps = slicermod.find_prusaslicer(s.get("prusaslicer_path", ""))
+                if not (uv and ps):
+                    steps.append({"step": "Нарезка", "ok": False, "detail": "для смолы установите PrusaSlicer и UVtools "
+                                  "(или нарежьте модель в Chitubox / Photon Workshop)"})
+                    return result
+                prof = await asyncio.to_thread(slicermod.auto_resin_profiles, uv, s.get("resin_profiles_dir", ""), model)
+                if o.get("resin_printer"):
+                    prof = {"printer": {"path": o["resin_printer"], "name": Path(o["resin_printer"]).stem},
+                            "print": {"path": o.get("resin_print") or (prof.get("print") or {}).get("path", ""), "name": ""}}
+                if prof.get("error"):
+                    steps.append({"step": "Нарезка", "ok": False, "detail": prof["error"]})
+                    return result
+                out, _log = await slicermod.slice_resin(ps, uv, new["stored_path"], printer_ini=prof["printer"]["path"],
+                                                        print_ini=prof["print"]["path"], work_dir=str(data / "slicing"),
+                                                        exposure_s=o.get("exposure_s"), bottom_exposure_s=o.get("bottom_exposure_s"),
+                                                        bottom_layers=o.get("bottom_layers"))
+                fname = Path(out).name
+            else:
+                if not slicermod.find_slicers(s.get("slicer_path", "")):
+                    steps.append({"step": "Нарезка", "ok": False, "detail": "слайсер не найден — установите OrcaSlicer "
+                                  "(или нарежьте модель в своём слайсере и загрузите G-code / 3MF)"})
+                    return result
+                prof = await asyncio.to_thread(slicermod.auto_profiles, s.get("slicer_path", ""),
+                                               s.get("slicer_profiles_dir", ""), model, o.get("material") or "PLA")
+                machine = o.get("machine") or (prof.get("machine") or {}).get("path")
+                process = o.get("process") or (prof.get("process") or {}).get("path")
+                filament = o.get("filament") or (prof.get("filament") or {}).get("path")
+                if not (machine and process):
+                    steps.append({"step": "Нарезка", "ok": False, "detail": prof.get("error") or "профили не выбраны"})
+                    return result
+                out, _log = await slicermod.slice_with_orca(
+                    s.get("slicer_path", ""), new["stored_path"], machine=machine, process=process,
+                    filaments=[filament] if filament else [], work_dir=str(data / "slicing"), arrange=False,
+                    orient=False, profiles_dir=s.get("slicer_profiles_dir", ""),
+                    bed_type=o.get("bed_type") if o.get("bed_type") is not None else prof.get("bed_type", ""))
+                fname = f"{Path(it['filename']).stem}.gcode.3mf"
+                steps.append({"step": "Профили", "ok": True, "detail": " · ".join(
+                    Path(p).stem for p in (machine, process, filament) if p)})
+        except Exception as e:  # noqa: BLE001
+            steps.append({"step": "Нарезка", "ok": False, "detail": str(e)[:1500]})
+            return result
+        sliced = store_upload(out, fname, mgr.library_dir)
+        analysis, thumb = await asyncio.to_thread(analyze_path, sliced["stored_path"], sliced["filename"])
+        sliced.update(kind=analysis["kind"], technology=tech, analysis=analysis, thumbnail=thumb)
+        db.add_library_item(sliced)
+        summ = summarize_analysis(analysis)
+        steps.append({"step": "Нарезка", "ok": True, "detail": "файл для печати готов"})
+        result.update(sliced_item_id=sliced["id"], summary=summ)
+        await mgr.broadcast({"type": "library_changed"})
+        return result
+
     @app.get("/api/slicer/resin-profiles")
     async def resin_profiles() -> dict[str, Any]:
         s = db.get_settings()

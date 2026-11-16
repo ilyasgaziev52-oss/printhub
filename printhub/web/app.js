@@ -81,7 +81,7 @@ function fmtEta(remaining) {
 const fmtNum = (v, d = 1) => (v === null || v === undefined || isNaN(v) ? '—' : Number(v).toLocaleString('ru-RU', { maximumFractionDigits: d }));
 const fmtSize = (b) => (b == null ? '—' : b > 1048576 ? fmtNum(b / 1048576, 1) + ' МБ' : fmtNum(b / 1024, 0) + ' КБ');
 const fmtDate = (ts) => (ts ? new Date(ts * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
-const money = (v) => fmtNum(v, 2) + ' ' + (S.settings.currency || '₽');
+const money = (v) => fmtNum(v, 2) + ' ' + (S.settings.currency || '₸');
 
 function modal(title, bodyHtml, { wide = false } = {}) {
   const bg = document.createElement('div');
@@ -690,6 +690,7 @@ async function renderPrepare() {
   }
   if (!items.find((i) => i.id === S.prepare.id)) S.prepare.id = items[0].id;
   const info = S.info.slicers || [];
+  const pr = S.printers[S.prepare.printer];
   $('#main').innerHTML = `
   <div class="row" style="margin-bottom:12px">
     <h2 style="margin:0">Подготовка модели</h2><span class="spacer"></span>
@@ -703,7 +704,31 @@ async function renderPrepare() {
         <span class="spacer"></span><span class="muted">мышь: вращение, колесо: масштаб, правая кнопка: сдвиг</span></div>
     </div>
     <div>
+      <div class="panel">
+        <button class="btn primary" id="auto-prep" style="width:100%;justify-content:center;font-size:16px;min-height:46px">✨ Подготовить к печати</button>
+        <p class="small muted" style="margin:8px 0 0">${pr ? `Для принтера «${esc(pr.config.name)}»: ` : 'Выберите принтер выше. '}исправит модель, положит её устойчиво, проверит, что помещается на стол, и нарежет${pr && pr.config.technology === 'resin' ? ' для фотополимера' : ''}.</p>
+        <div id="prep-result"></div>
+      </div>
       <div class="panel"><h3>Проверка</h3><div id="report" class="muted">Анализ…</div></div>
+      <div class="panel"><h3>Оценка до нарезки</h3><div id="estimate" class="small muted">—</div></div>
+      <details id="prep-adv" ${localStorageGet('prep_adv_open') === '1' ? 'open' : ''}>
+      <summary class="panel" style="cursor:pointer;list-style:none;margin-top:14px"><b>⚙ Дополнительные настройки</b> <span class="small muted">— если нужно что-то поправить вручную</span></summary>
+      <div class="panel"><h3>Автоподготовка</h3>
+        <div class="form" style="grid-template-columns:1fr 1fr">
+          <label class="row small"><input type="checkbox" data-po="repair"> исправлять ошибки модели</label>
+          <label class="row small"><input type="checkbox" data-po="aggressive"> глубокий ремонт (MeshFix)</label>
+          <label class="row small"><input type="checkbox" data-po="merge_bodies"> объединять пересекающиеся тела</label>
+          <label class="row small"><input type="checkbox" data-po="fit_rotate"> разворачивать, чтобы поместилось</label>
+          <label class="row small"><input type="checkbox" data-po="scale_to_fit"> уменьшать, если не помещается</label>
+          <label class="row small"><input type="checkbox" data-po="slice"> нарезать после подготовки</label>
+          <label class="field">Ориентация<select data-po="orient">
+            <option value="auto">авто (менять, только если плохая)</option><option value="none">не менять</option>
+            <option value="balanced">баланс</option><option value="supports">минимум поддержек</option>
+            <option value="contact">максимум контакта со столом</option><option value="height">минимальная высота</option></select></label>
+          <label class="field">Материал (для профиля слайсера)<select data-po="material">
+            ${['PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PA', 'PC'].map((x) => `<option>${x}</option>`).join('')}</select></label>
+        </div>
+      </div>
       <div class="panel"><h3>Исправление</h3>
         <div class="row"><button class="btn primary" data-repair="basic">🩹 Исправить</button>
           <button class="btn" data-repair="aggressive" title="MeshFix: тяжёлые случаи, самопересечения">Глубокий ремонт</button>
@@ -732,8 +757,7 @@ async function renderPrepare() {
         </div>
         <p class="small muted">Каждая операция сохраняет новую версию файла в библиотеке (исходник не меняется).</p>
       </div>
-      <div class="panel"><h3>Оценка до нарезки</h3><div id="estimate" class="small muted">—</div></div>
-      <div class="panel"><h3>Нарезка (слайсер)</h3>
+      <div class="panel"><h3>Нарезка вручную (выбор профилей)</h3>
         ${info.length ? `<p class="small">FDM: ${info.map((s) => esc(s.name)).join(', ')}</p>
           <button class="btn primary" id="slice-btn">✂ Нарезать для FDM…</button>` :
     `<p class="small muted">FDM-слайсер не найден. Установите OrcaSlicer (подходит для Bambu, Elegoo и Anycubic) и укажите путь в «Настройках», либо нарежьте модель в своём слайсере и загрузите G-code / 3MF во «Файлы».</p>`}
@@ -741,11 +765,22 @@ async function renderPrepare() {
           <button class="btn" id="slice-resin-btn">✂ Нарезать для фотополимера…</button>` :
     `<p class="small muted" style="margin-top:10px">Для нарезки под фотополимер установите PrusaSlicer и UVtools (бесплатные) — или режьте в Chitubox / Photon Workshop и загружайте готовый файл.</p>`}
       </div>
+      </details>
     </div>
   </div>`;
+  // настройки автоподготовки — запоминаются в браузере
+  const PO_DEFAULT = { repair: true, aggressive: false, merge_bodies: true, fit_rotate: true, scale_to_fit: false, slice: true, orient: 'auto', material: 'PLA' };
+  let po = { ...PO_DEFAULT };
+  try { po = { ...PO_DEFAULT, ...JSON.parse(localStorageGet('prep_opts') || '{}') }; } catch { /* по умолчанию */ }
+  $$('[data-po]').forEach((el) => {
+    const k = el.dataset.po;
+    if (el.type === 'checkbox') el.checked = !!po[k]; else el.value = po[k];
+    el.onchange = () => { po[k] = el.type === 'checkbox' ? el.checked : el.value; localStorageSet('prep_opts', JSON.stringify(po)); };
+  });
+  $('#prep-adv').ontoggle = (e) => localStorageSet('prep_adv_open', e.target.open ? '1' : '0');
+  $('#auto-prep').onclick = () => autoPrepare(S.prepare.id, po);
   $('#prep-item').onchange = (e) => { S.prepare.id = e.target.value; localStorageSet('prepare_id', S.prepare.id); renderPrepare(); };
   $('#prep-printer').onchange = (e) => { S.prepare.printer = e.target.value; localStorageSet('prepare_printer', S.prepare.printer); renderPrepare(); };
-  const pr = S.printers[S.prepare.printer];
   const bed = pr && pr.config.build_volume && pr.config.build_volume[0] ? pr.config.build_volume : [256, 256, 256];
   const { ModelViewer } = await import('./viewer.js');
   if (S.prepare.viewer) S.prepare.viewer.dispose();
@@ -810,6 +845,41 @@ async function renderPrepare() {
   if (sb) sb.onclick = () => sliceDialog(id);
   const rb = $('#slice-resin-btn');
   if (rb) rb.onclick = () => sliceResinDialog(id);
+}
+
+async function autoPrepare(id, po) {
+  const btn = $('#auto-prep');
+  const box = $('#prep-result');
+  const pid = S.prepare.printer;
+  if (!pid && po.slice) toast('Принтер не выбран: модель будет подготовлена, но не нарезана', 'info', 7000);
+  btn.disabled = true;
+  btn.textContent = po.slice && pid ? '⏳ Готовлю и нарезаю… (до нескольких минут)' : '⏳ Готовлю…';
+  box.innerHTML = '';
+  const r = await guard(() => api(`/library/${id}/prepare`, { method: 'POST', json: { printer_id: pid, options: { ...po, slice: po.slice && !!pid } } }));
+  btn.disabled = false;
+  btn.textContent = '✨ Подготовить к печати';
+  if (!r) return;
+  let cost = '';
+  if (r.sliced_item_id) {
+    const e = await api('/estimate', { method: 'POST', json: { library_id: r.sliced_item_id, printer_id: pid } }).catch(() => null);
+    if (e) {
+      const c = e.cost;
+      cost = `<div class="stats" style="margin:12px 0">
+        <div class="stat"><span class="v">${fmtDur(e.time_s)}</span><span class="l">время</span></div>
+        <div class="stat"><span class="v">${c.material_ml ? fmtNum(c.material_ml, 1) + ' мл' : fmtNum(c.material_g, 1) + ' г'}</span><span class="l">материал</span></div>
+        <div class="stat"><span class="v">${money(c.total)}</span><span class="l">себестоимость</span></div></div>`;
+    }
+  }
+  box.innerHTML = `<ul class="issues" style="margin-top:12px">${r.steps.map((s) => `<li class="${s.ok ? 'ok' : 'error'}">${s.ok ? '✓' : '✗'} <b>${esc(s.step)}</b>: ${esc(s.detail)}</li>`).join('')}</ul>
+    ${cost}
+    <div class="row" style="margin-top:10px">
+      ${r.sliced_item_id ? `<button class="btn primary" id="prep-send">▶ Отправить на печать</button>` : ''}
+      <button class="btn" id="prep-open">Показать подготовленную модель</button></div>
+    ${!r.sliced_item_id && r.printable ? '<p class="small muted">Модель готова. Чтобы напечатать, нарежьте её (раздел «Дополнительные настройки») или в своём слайсере.</p>' : ''}`;
+  const send = $('#prep-send');
+  if (send) send.onclick = () => sendDialog(r.sliced_item_id);
+  $('#prep-open').onclick = () => { S.prepare.id = r.mesh_item_id; localStorageSet('prepare_id', r.mesh_item_id); renderPrepare(); };
+  toast(r.sliced_item_id ? 'Готово к печати' : r.printable ? 'Модель подготовлена' : 'Есть проблемы — смотрите список', r.printable ? 'ok' : 'error');
 }
 
 async function sliceResinDialog(id) {
@@ -1095,6 +1165,12 @@ function renderUpdatePanel() {
 }
 
 // ------------------------------------------------------------------ настройки
+const CURRENCIES = [
+  ['₸', 'тенге'], ['₽', 'рубль'], ['$', 'доллар США'], ['€', 'евро'], ['сўм', 'узбекский сум'], ['сом', 'киргизский сом'],
+  ['Br', 'белорусский рубль'], ['₴', 'гривна'], ['₾', 'лари'], ['֏', 'драм'], ['₼', 'манат'], ['ЅМ', 'сомони'],
+  ['¥', 'юань'], ['₺', 'турецкая лира'], ['£', 'фунт'], ['AED', 'дирхам ОАЭ'],
+];
+
 async function renderSettings() {
   S.settings = await api('/settings');
   const s = S.settings;
@@ -1102,12 +1178,15 @@ async function renderSettings() {
   $('#main').innerHTML = `<h2>Настройки</h2>
   <div class="cols"><div>
     <div class="panel"><h3>Стоимость</h3><div class="form">
-      <label class="field">Валюта<input name="currency" value="${esc(s.currency)}"></label>
+      <label class="field">Валюта<select name="currency">${CURRENCIES.concat(CURRENCIES.some(([c]) => c === s.currency) || !s.currency ? [] : [[s.currency, s.currency]])
+        .map(([c, n]) => `<option value="${esc(c)}" ${c === (s.currency || '₸') ? 'selected' : ''}>${esc(c)} — ${esc(n)}</option>`).join('')}</select></label>
       <label class="field">Электричество, за кВт·ч<input name="electricity_price" type="number" step="0.01" value="${s.electricity_price}"></label>
       <label class="field">Амортизация, за час<input name="depreciation_per_hour" type="number" step="0.1" value="${s.depreciation_per_hour}"></label>
       <label class="field">Работа, за задание<input name="labor_per_job" type="number" value="${s.labor_per_job}"></label>
       <label class="field">Запас на брак, %<input name="failure_pct" type="number" value="${s.failure_pct}"></label>
-      <label class="field">Наценка, %<input name="markup_pct" type="number" value="${s.markup_pct}"></label></div></div>
+      <label class="field">Наценка, %<input name="markup_pct" type="number" value="${s.markup_pct}"></label></div>
+      <div class="row" style="margin-top:10px"><button class="btn small" id="recalc">💱 Пересчитать все цены по курсу…</button>
+        <span class="small muted">тариф, амортизация, работа и цены материалов</span></div></div>
     <div class="panel"><h3>Уведомления в Telegram</h3><div class="form">
       <label class="field">Токен бота (от @BotFather)<input name="telegram_token" value="${esc(s.telegram_token)}"></label>
       <label class="field">Chat ID<input name="telegram_chat_id" value="${esc(s.telegram_chat_id)}"></label></div>
@@ -1142,6 +1221,21 @@ async function renderSettings() {
       S.info = await api('/info');
       renderSettings();
     }
+  };
+  $('#recalc').onclick = async () => {
+    const from = S.settings.currency || '₽';
+    const rate = parseFloat(String(window.prompt(`Сколько новых единиц валюты в 1 ${from}?\nНапример, из рублей в тенге: 1 ₽ ≈ 6 ₸ — введите 6.\nВсе цены будут умножены на это число.`, '') || '').replace(',', '.'));
+    if (!rate || rate <= 0) return;
+    const to = $('[name=currency]').value;
+    const keys = ['electricity_price', 'depreciation_per_hour', 'labor_per_job'];
+    const body = { currency: to };
+    keys.forEach((k) => { body[k] = Math.round((+S.settings[k] || 0) * rate * 100) / 100; });
+    const mats = await api('/materials');
+    await guard(async () => {
+      await api('/settings', { method: 'PUT', json: body });
+      for (const m of mats) await api('/materials', { method: 'POST', json: { ...m, price: Math.round((+m.price || 0) * rate) } });
+    }, `Цены пересчитаны: ×${rate}, валюта ${to}`);
+    renderSettings();
   };
   $('#tg-test').onclick = async () => {
     const r = await guard(() => api('/settings/test-telegram', { method: 'POST' }));

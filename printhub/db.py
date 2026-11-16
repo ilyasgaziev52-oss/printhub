@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS queue (
 """
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "currency": "₽",
+    "currency": "₸",
     "electricity_price": 6.0,          # за кВт·ч
     "labor_per_job": 0.0,
     "markup_pct": 0.0,
