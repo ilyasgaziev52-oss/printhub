@@ -249,29 +249,74 @@ def to_trimesh(m: Manifold, name: str) -> trimesh.Trimesh:
     return t
 
 
+def write_3mf(path: Path, assemblies: list[tuple[str, list[tuple[str, trimesh.Trimesh]], tuple[float, float]]],
+              title: str) -> None:
+    """3MF по стандарту: каждая сборка — один объект из частей (components), части = цвета.
+    Bambu Studio / OrcaSlicer / PrusaSlicer открывают такую сборку как «объект с несколькими частями»."""
+    import zipfile
+    from xml.sax.saxutils import quoteattr
+
+    objs: list[str] = []
+    build_items: list[str] = []
+    oid = 0
+    for asm_name, parts, (ox, oy) in assemblies:
+        zmin = min(t.bounds[0][2] for _, t in parts)
+        comp_ids = []
+        for part_name, t in parts:
+            oid += 1
+            comp_ids.append(oid)
+            v = t.vertices - np.array([0.0, 0.0, zmin])
+            vx = "".join(f'<vertex x="{a:.4f}" y="{b:.4f}" z="{c:.4f}"/>' for a, b, c in v)
+            tr = "".join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in t.faces)
+            objs.append(f'<object id="{oid}" type="model" name={quoteattr(part_name)}><mesh><vertices>{vx}</vertices>'
+                        f'<triangles>{tr}</triangles></mesh></object>')
+        oid += 1
+        comps = "".join(f'<component objectid="{c}"/>' for c in comp_ids)
+        objs.append(f'<object id="{oid}" type="model" name={quoteattr(asm_name)}><components>{comps}</components></object>')
+        build_items.append(f'<item objectid="{oid}" transform="1 0 0 0 1 0 0 0 1 {ox:.3f} {oy:.3f} 0"/>')
+    model = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+             '<model unit="millimeter" xml:lang="ru-RU" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
+             f'<metadata name="Title">{title}</metadata><metadata name="Application">PrintHub</metadata>'
+             f'<resources>{"".join(objs)}</resources><build>{"".join(build_items)}</build></model>')
+    ctypes = ('<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+              '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+              '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Target="/3D/3dmodel.model" Id="rel0" '
+            'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ctypes)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("3D/3dmodel.model", model)
+
+
+PART_NAMES = {
+    "1_подставка_коричневый": "Подставка (коричневый)", "1_надпись_белый": "Надпись iGateway (белый)",
+    "1_площадка_и_труба_серый": "Площадка и труба (серый)", "1_ограждение_жёлтый": "Ограждение (жёлтый)",
+    "2_насос_красный": "Насос (красный)", "2_надпись_SULZER_белый": "Надпись SULZER (белый)",
+    "2_шланг_чёрный": "Шланг (чёрный)",
+}
+
+
 def main(out_dir: str) -> None:
     out = Path(out_dir)
-    (out / "stl").mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     parts = build()
     meshes = {name: to_trimesh(m, name) for name, m in parts.items()}
     for name, t in meshes.items():
         assert t.is_watertight, f"{name}: не замкнута"
-        t.export(out / "stl" / f"{name}.stl")
         print(f"{name:32s} {t.extents.round(1)} мм  объём {t.volume / 1000:.1f} см³")
-
-    def scene(prefix: str | None, drop: bool) -> trimesh.Scene:
-        sel = {n: t.copy() for n, t in meshes.items() if prefix is None or n.startswith(prefix)}
-        zmin = min(t.bounds[0][2] for t in sel.values())
-        sc = trimesh.Scene()
-        for n, t in sel.items():
-            if drop:
-                t.apply_translation((0, 0, -zmin))
-            sc.add_geometry(t, node_name=n, geom_name=n)
-        return sc
-
-    scene("1_", True).export(out / "Sulzer_часть1_подставка_площадка.3mf")
-    scene("2_", True).export(out / "Sulzer_часть2_насос_шланг.3mf")
-    scene(None, False).export(out / "Sulzer_в_сборе.3mf")
+    if "--stl" in sys.argv:
+        (out / "stl").mkdir(exist_ok=True)
+        for name, t in meshes.items():
+            t.export(out / "stl" / f"{name}.stl")
+    # две модели рядом на столе 256×256: подставка слева, насос справа
+    part1 = [(PART_NAMES[n], t) for n, t in meshes.items() if n.startswith("1_")]
+    part2 = [(PART_NAMES[n], t.copy().apply_translation((-PUMP[0], -PUMP[1], 0))) for n, t in meshes.items() if n.startswith("2_")]
+    write_3mf(out / "Sulzer_iGateway.3mf", [
+        ("Sulzer - подставка", part1, (100.0, 128.0)),
+        ("Sulzer - насос", part2, (205.0, 128.0)),
+    ], "Sulzer iGateway")
 
 
 if __name__ == "__main__":
