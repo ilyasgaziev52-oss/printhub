@@ -57,6 +57,13 @@ FTP_530_HELP = ("Принтер отклонил вход по FTP (код 530),
                 "сверьте его на экране (Настройки → Сеть) и обновите в настройках принтера в PrintHub.")
 
 
+MQTT_UNAVAILABLE_HELP = ("Принтер отклонил подключение («Server unavailable»). Обычно причина одна из двух: "
+                         "1) к принтеру уже подключено много программ — закройте Bambu Studio / OrcaSlicer на других "
+                         "компьютерах, отключите Home Assistant и т.п., затем перезагрузите принтер; "
+                         "2) принтер в облачном режиме — включите на экране «LAN Only» и «Режим разработчика» "
+                         "(Настройки → WLAN), после этого код доступа изменится — впишите новый.")
+
+
 def model_from(code: str = "", serial: str = "") -> str:
     if code in DEV_MODELS:
         return DEV_MODELS[code]
@@ -258,6 +265,8 @@ class BambuDriver(PrinterDriver):
             txt = str(e)
             if "authorized" in txt.lower() or "password" in txt.lower():
                 raise DriverError("Неверный код доступа (LAN Access Code)") from e
+            if "unavailable" in txt.lower():
+                raise DriverError(MQTT_UNAVAILABLE_HELP) from e
             raise
         m.subscribe(f"device/{self.serial}/report")
         return m
@@ -674,6 +683,52 @@ class BambuDriver(PrinterDriver):
             writer.close()
 
     # ------------------------------------------------------------------ проверка/поиск
+    async def diagnose(self) -> list[dict[str, Any]]:
+        from .base import tcp_open
+        host = self.cfg.host
+        steps: list[dict[str, Any]] = []
+
+        def add(step: str, ok: bool, detail: str) -> None:
+            steps.append({"step": step, "ok": ok, "detail": detail})
+
+        ports = {8883: "MQTT (статус и управление)", 990: "FTP (файлы)", 6000: "камера P1/A1", 322: "камера X1/P2S/H2"}
+        opened = {}
+        for port, what in ports.items():
+            opened[port] = await tcp_open(host, port)
+        add(f"Принтер {host} в сети", any(opened.values()),
+            "отвечает" if any(opened.values()) else "не отвечает ни на один порт: принтер выключен, другой IP "
+            "или компьютер в другой сети (гостевой Wi-Fi, другой роутер)")
+        for port, what in ports.items():
+            if port in (6000, 322) and not opened[port]:
+                continue
+            add(f"Порт {port} — {what}", opened[port], "открыт" if opened[port] else "закрыт")
+        if not opened[8883]:
+            return steps
+        sn = await fetch_serial_from_cert(host)
+        add("Серийный номер из сертификата", bool(sn), sn or "не удалось прочитать")
+        if sn and self.cfg.serial and sn.upper() != self.serial:
+            add("Серийный номер в настройках", False, f"указан {self.cfg.serial}, а принтер сообщает {sn}")
+        if sn and not self.cfg.serial:
+            self.cfg.serial = sn
+        if not self.cfg.access_code:
+            add("Код доступа", False, "не указан")
+            return steps
+        try:
+            r = await asyncio.wait_for(self.test_connection(), 25)
+            add("Вход по MQTT", True, f"{r.get('model', '')}, прошивка {r.get('firmware') or '?'}")
+            dm = r.get("developer_mode")
+            add("Режим разработчика", dm is not False,
+                "включён — управление печатью доступно" if dm else
+                ("выключен — статус виден, но запуск/пауза/стоп недоступны" if dm is False else "не удалось определить"))
+            ftp = r.get("ftp_ok")
+            add("Вход по FTP", bool(ftp), "успешно" if ftp else (r.get("warning") or "ошибка"))
+        except Exception as e:  # noqa: BLE001
+            add("Вход по MQTT", False, str(e) or type(e).__name__)
+            if opened[990]:
+                problem = await asyncio.to_thread(self.check_ftp)
+                add("Вход по FTP", not problem, problem or "успешно")
+        return steps
+
     async def test_connection(self) -> dict[str, Any]:
         self.mqtt = await self._connect()
         try:

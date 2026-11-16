@@ -192,9 +192,33 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         await mgr.broadcast({"type": "printers_changed"})
         return {"ok": True}
 
+    def with_stored_secrets(body: dict[str, Any]) -> dict[str, Any]:
+        """В окне настроек секреты показаны точками — подставляем сохранённые значения."""
+        body = dict(body)
+        old = db.get_printer(body.get("id", "")) if body.get("id") else None
+        for k in ("access_code", "api_key"):
+            if body.get(k) == "••••":
+                body[k] = getattr(old, k) if old else ""
+        return body
+
+    @app.post("/api/printers/diagnose")
+    async def diagnose_printer(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        cfg = cfg_from_body(with_stored_secrets(body), "diag")
+        drv = mgr.make_driver(cfg)
+        drv.on_update = None
+        try:
+            steps = await asyncio.wait_for(drv.diagnose(), 60)
+        except asyncio.TimeoutError:
+            steps = [{"step": "Диагностика", "ok": False, "detail": "не уложилась в 60 секунд"}]
+        except Exception as e:  # noqa: BLE001
+            steps = [{"step": "Диагностика", "ok": False, "detail": str(e) or type(e).__name__}]
+        finally:
+            await drv.close()
+        return {"steps": steps, "ok": all(s["ok"] for s in steps)}
+
     @app.post("/api/printers/test")
     async def test_printer(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        cfg = cfg_from_body(body, "test")
+        cfg = cfg_from_body(with_stored_secrets(body), "test")
         drv = mgr.make_driver(cfg)
         drv.on_update = None
         try:

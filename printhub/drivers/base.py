@@ -147,6 +147,23 @@ class PrinterDriver(ABC):
         """Быстрая проверка доступности (для мастера добавления)."""
         return {"ok": True}
 
+    async def diagnose(self) -> list[dict[str, Any]]:
+        """Пошаговая диагностика: [{"step", "ok", "detail"}]. По умолчанию — порт и проверка соединения."""
+        steps: list[dict[str, Any]] = []
+        if self.port:
+            ok = await tcp_open(self.cfg.host, self.port)
+            steps.append({"step": f"Порт {self.port} на {self.cfg.host}", "ok": ok,
+                          "detail": "открыт" if ok else "не отвечает — принтер выключен, другой IP или другая сеть"})
+            if not ok:
+                return steps
+        try:
+            r = await asyncio.wait_for(self.test_connection(), 25)
+            steps.append({"step": "Подключение к принтеру", "ok": bool(r.get("ok")),
+                          "detail": r.get("error") or r.get("warning") or "успешно"})
+        except Exception as e:  # noqa: BLE001
+            steps.append({"step": "Подключение к принтеру", "ok": False, "detail": str(e) or type(e).__name__})
+        return steps
+
     # ------------------------------------------------------------------ поиск в сети
     @classmethod
     async def discover(cls, timeout: float = 3.0) -> list[DiscoveredPrinter]:
@@ -161,6 +178,15 @@ class PrinterDriver(ABC):
     def describe(cls) -> dict[str, Any]:
         return {"kind": cls.kind, "title": cls.title, "default_port": cls.default_port,
                 "technology": cls.technology, "required_fields": list(cls.required_fields), "help": cls.help}
+
+
+async def tcp_open(host: str, port: int, timeout: float = 3.0) -> bool:
+    try:
+        _, w = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+        w.close()
+        return True
+    except (OSError, asyncio.TimeoutError):
+        return False
 
 
 async def ffmpeg_jpeg_frames(url: str, input_args: Optional[list[str]] = None, fps: float = 2.0,

@@ -440,7 +440,9 @@ function editPrinter(cfg, needs = []) {
     </div>
     <div class="msg small" id="kind-help"></div>
     <div class="row" style="margin-top:14px">
-      <button class="btn" id="test">Проверить соединение</button><span id="test-res" class="small"></span><span class="spacer"></span>
+      <button class="btn" id="test">Проверить соединение</button>
+      <button class="btn" id="diag" title="Пошаговая проверка: сеть, порты, вход, FTP">🩺 Диагностика</button>
+      <span id="test-res" class="small"></span><span class="spacer"></span>
       ${!isNew ? '<button class="btn danger" id="del">Удалить</button>' : ''}
       <button class="btn primary" id="save">${isNew ? 'Добавить' : 'Сохранить'}</button>
     </div>`);
@@ -471,6 +473,13 @@ function editPrinter(cfg, needs = []) {
       if (r.ok && r.model && !f.querySelector('[name=model]').value) f.querySelector('[name=model]').value = r.model;
     }
     else $('#test-res', f).textContent = '';
+  };
+  $('#diag', f).onclick = async () => {
+    const d = modal('Диагностика подключения', '<p class="muted">Проверяю сеть, порты и вход… (до минуты)</p>');
+    const r = await guard(() => api('/printers/diagnose', { method: 'POST', json: val() }));
+    if (!r) { d.close(); return; }
+    d.el.innerHTML = `<ul class="issues">${r.steps.map((s) => `<li class="${s.ok ? 'ok' : 'error'}">${s.ok ? '✓' : '✗'} <b>${esc(s.step)}</b>: ${esc(s.detail)}</li>`).join('')}</ul>
+      <p class="small muted" style="margin-top:10px">${r.ok ? 'Всё в порядке.' : 'Пришлите скриншот этого окна, если не получается исправить самостоятельно.'}</p>`;
   };
   $('#save', f).onclick = async () => {
     const body = val();
