@@ -17,6 +17,8 @@ out = a[a.index('--outputdir') + 1]; name = a[a.index('--export-3mf') + 1]
 settings = a[a.index('--load-settings') + 1].split(';')
 m = json.load(open(settings[0]))
 assert m.get('printable_height') == '265', m
+proc = json.load(open(settings[1]))
+open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'last_process.json'), 'w').write(json.dumps(proc))
 with zipfile.ZipFile(os.path.join(out, name), 'w') as z:
     z.writestr('Metadata/plate_1.gcode', '; total estimated time: 42m 0s\\nG1 X1 E1\\n')
     z.writestr('Metadata/slice_info.config', '<config><plate><metadata key="index" value="1"/><metadata key="prediction" value="2520"/><metadata key="weight" value="12.5"/></plate></config>')
@@ -77,6 +79,22 @@ async def test_prepare_endpoint(tmp_path):
         assert r["printable"] and r["report"]["size_mm"][2] == pytest.approx(60, abs=0.5)
         assert r["sliced_item_id"] and r["summary"]["time_s"] == 2520 and r["summary"]["material_g"] == 12.5
         assert all(s["ok"] for s in r["steps"]), r["steps"]
+        sup = next(s for s in r["steps"] if s["step"] == "Поддержки")
+        assert "не нужны" in sup["detail"]  # цилиндр встал на торец — нависаний нет
+        assert json.loads((tmp_path / "last_process.json").read_text())["enable_support"] == "0"
+        # «гриб»: широкая шляпка на тонкой ножке — нужны поддержки
+        mush = trimesh.util.concatenate([trimesh.creation.cylinder(radius=4, height=30).apply_translation([0, 0, 15]),
+                                         trimesh.creation.cylinder(radius=20, height=6).apply_translation([0, 0, 33])])
+        item2 = (await c.post("/api/library", files={"file": ("mush.stl", mush.export(file_type="stl"), "model/stl")})).json()
+        r3 = (await c.post(f"/api/library/{item2['id']}/prepare", json={"printer_id": "n4", "options": {"orient": "none"}})).json()
+        sup = next(s for s in r3["steps"] if s["step"] == "Поддержки")
+        assert "включены: древовидные" in sup["detail"], r3["steps"]
+        proc = json.loads((tmp_path / "last_process.json").read_text())
+        assert proc["enable_support"] == "1" and proc["support_type"] == "tree(auto)"
+        r4 = (await c.post(f"/api/library/{item2['id']}/prepare", json={"printer_id": "n4", "options": {
+            "orient": "none", "supports": "on", "support_type": "normal", "support_plate_only": True}})).json()
+        proc = json.loads((tmp_path / "last_process.json").read_text())
+        assert proc["support_type"] == "normal(auto)" and proc["support_on_build_plate_only"] == "1", r4["steps"]
         # без принтера — только подготовка, без нарезки
         r2 = (await c.post(f"/api/library/{item['id']}/prepare", json={"options": {"slice": False}})).json()
         assert r2["sliced_item_id"] is None and r2["printable"]

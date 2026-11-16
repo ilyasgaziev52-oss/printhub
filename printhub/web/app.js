@@ -728,6 +728,18 @@ async function renderPrepare() {
           <label class="field">Материал (для профиля слайсера)<select data-po="material">
             ${['PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PA', 'PC'].map((x) => `<option>${x}</option>`).join('')}</select></label>
         </div>
+        <h3 style="margin-top:14px">Поддержки</h3>
+        <div class="form" style="grid-template-columns:1fr 1fr">
+          <label class="field">Когда ставить<select data-po="supports">
+            <option value="auto">авто — если есть нависания</option><option value="on">всегда</option><option value="off">никогда</option></select></label>
+          <label class="field">Тип (пластик)<select data-po="support_type">
+            <option value="tree">древовидные — легко снимаются</option><option value="normal">обычные — для плоских нависаний</option></select></label>
+          <label class="row small"><input type="checkbox" data-po="support_plate_only"> только от стола (не опираться на модель)</label>
+          <label class="field">Угол нависания, ° (пусто — из профиля)<input type="number" min="10" max="80" data-po="support_angle" placeholder="30"></label>
+          <label class="field">Плотность (смола)<select data-po="resin_supports">
+            <option value="light">лёгкие</option><option value="medium">средние</option><option value="heavy">тяжёлые</option></select></label>
+        </div>
+        <p class="small muted">Красным в 3D-просмотре подсвечены места, которым нужны поддержки.</p>
       </div>
       <div class="panel"><h3>Исправление</h3>
         <div class="row"><button class="btn primary" data-repair="basic">🩹 Исправить</button>
@@ -769,13 +781,17 @@ async function renderPrepare() {
     </div>
   </div>`;
   // настройки автоподготовки — запоминаются в браузере
-  const PO_DEFAULT = { repair: true, aggressive: false, merge_bodies: true, fit_rotate: true, scale_to_fit: false, slice: true, orient: 'auto', material: 'PLA' };
+  const PO_DEFAULT = { repair: true, aggressive: false, merge_bodies: true, fit_rotate: true, scale_to_fit: false, slice: true, orient: 'auto', material: 'PLA',
+    supports: 'auto', support_type: 'tree', support_plate_only: false, support_angle: '', resin_supports: 'medium' };
   let po = { ...PO_DEFAULT };
   try { po = { ...PO_DEFAULT, ...JSON.parse(localStorageGet('prep_opts') || '{}') }; } catch { /* по умолчанию */ }
   $$('[data-po]').forEach((el) => {
     const k = el.dataset.po;
     if (el.type === 'checkbox') el.checked = !!po[k]; else el.value = po[k];
-    el.onchange = () => { po[k] = el.type === 'checkbox' ? el.checked : el.value; localStorageSet('prep_opts', JSON.stringify(po)); };
+    el.onchange = () => {
+      po[k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? (el.value === '' ? '' : +el.value) : el.value;
+      localStorageSet('prep_opts', JSON.stringify(po));
+    };
   });
   $('#prep-adv').ontoggle = (e) => localStorageSet('prep_adv_open', e.target.open ? '1' : '0');
   $('#auto-prep').onclick = () => autoPrepare(S.prepare.id, po);
@@ -855,7 +871,9 @@ async function autoPrepare(id, po) {
   btn.disabled = true;
   btn.textContent = po.slice && pid ? '⏳ Готовлю и нарезаю… (до нескольких минут)' : '⏳ Готовлю…';
   box.innerHTML = '';
-  const r = await guard(() => api(`/library/${id}/prepare`, { method: 'POST', json: { printer_id: pid, options: { ...po, slice: po.slice && !!pid } } }));
+  const opts = { ...po, slice: po.slice && !!pid };
+  if (opts.support_angle === '') delete opts.support_angle;
+  const r = await guard(() => api(`/library/${id}/prepare`, { method: 'POST', json: { printer_id: pid, options: opts } }));
   btn.disabled = false;
   btn.textContent = '✨ Подготовить к печати';
   if (!r) return;
@@ -921,6 +939,8 @@ async function sliceDialog(id) {
     <label class="field">Профиль печати<input list="dl-proc" id="proc" placeholder="0.20mm Standard"><datalist id="dl-proc">${opt(prof.processes)}</datalist></label>
     <label class="field">Филамент<input list="dl-fil" id="fil" placeholder="Bambu PLA Basic"><datalist id="dl-fil">${opt(prof.filaments)}</datalist></label>
     <label class="field">Тип стола<select id="bed">${(prof.bed_types || []).map((b) => `<option>${esc(b)}</option>`).join('')}</select></label>
+    <label class="field">Поддержки<select id="sup"><option value="">как в профиле печати</option><option value="tree">включить: древовидные</option>
+      <option value="normal">включить: обычные</option><option value="off">выключить</option></select></label>
     <label class="row small"><input type="checkbox" id="arrange" checked> авторасстановка</label>
     <label class="row small"><input type="checkbox" id="orient"> автоориентация</label></div>
     <p class="small muted">Можно выбрать из списка или вставить путь к своему .json-профилю, экспортированному из слайсера.</p>
@@ -931,7 +951,8 @@ async function sliceDialog(id) {
     const r = await guard(() => api(`/library/${id}/slice`, { method: 'POST', json: {
       machine: resolve($('#mach', m.el).value, prof.machines), process: resolve($('#proc', m.el).value, prof.processes),
       filaments: [resolve($('#fil', m.el).value, prof.filaments)].filter(Boolean), arrange: $('#arrange', m.el).checked, orient: $('#orient', m.el).checked,
-      bed_type: $('#bed', m.el).value } }));
+      bed_type: $('#bed', m.el).value,
+      ...($('#sup', m.el).value ? { supports: $('#sup', m.el).value === 'off' ? 'off' : 'on', support_type: $('#sup', m.el).value } : {}) } }));
     btn.disabled = false; btn.textContent = '✂ Нарезать';
     if (r) {
       $('#slog', m.el).textContent = r.log || '';

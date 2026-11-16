@@ -641,6 +641,4 @@ def auto_prepare(mesh: trimesh.Trimesh, build_volume: Optional[list[float]],
                                           f"{' × '.join(f'{v:.0f}' for v in bv)} мм — включите «Уменьшить, если не помещается»")
     place_on_bed(m, build_volume[:2] if build_volume and any(build_volume) else None)
     rep = analyze_mesh(m, build_volume, o.overhang_angle)
-    if rep.overhang_pct > 5:
-        step("Поддержки", True, f"нависания {rep.overhang_pct}% поверхности — слайсер добавит поддержки")
     return m, steps, rep

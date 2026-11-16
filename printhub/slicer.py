@@ -230,8 +230,13 @@ def resolve_profile(path: str, root: Optional[Path] = None) -> dict[str, Any]:
 async def slice_with_orca(slicer_path: str, model_path: str, *, machine: str, process: str,
                           filaments: list[str], work_dir: str, arrange: bool = True, orient: bool = False,
                           profiles_dir: str = "", plate: int = 0, bed_type: str = "",
+                          process_overrides: Optional[dict[str, Any]] = None,
                           timeout: float = 900) -> tuple[str, str]:
-    """Режет модель, возвращает (путь к .gcode.3mf, лог)."""
+    """Режет модель, возвращает (путь к .gcode.3mf, лог).
+
+    process_overrides — параметры, которые заменяют значения профиля печати
+    (например {"enable_support": "1", "support_type": "tree(auto)"}).
+    """
     if not slicer_path:
         sl = find_slicers()
         if not sl:
@@ -246,13 +251,16 @@ async def slice_with_orca(slicer_path: str, model_path: str, *, machine: str, pr
     for d in (job, out_dir, datadir):
         d.mkdir(parents=True, exist_ok=True)
 
-    def flat(src: str, name: str) -> str:
+    def flat(src: str, name: str, overrides: Optional[dict[str, Any]] = None) -> str:
         out = job / name
-        out.write_text(json.dumps(resolve_profile(src, root), ensure_ascii=False, indent=1), encoding="utf-8")
+        data = resolve_profile(src, root)
+        for k, v in (overrides or {}).items():
+            data[k] = v if isinstance(v, (list, dict)) else str(v)
+        out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
         return str(out)
 
     m_json = flat(machine, "machine.json")
-    p_json = flat(process, "process.json")
+    p_json = flat(process, "process.json", process_overrides)
     f_jsons = [flat(f, f"filament_{i}.json") for i, f in enumerate(filaments) if f]
     out_name = "result.gcode.3mf"
     cmd = [slicer_path, "--datadir", str(datadir), "--load-settings", f"{m_json};{p_json}"]
@@ -407,7 +415,8 @@ def auto_profiles(slicer_path: str, profiles_dir: str, printer_model: str,
     return {"machine": machine, "process": process, "filament": filament, "bed_type": bed}
 
 
-def auto_resin_profiles(uvtools_path: str, override_dir: str, printer_model: str) -> dict[str, Any]:
+def auto_resin_profiles(uvtools_path: str, override_dir: str, printer_model: str,
+                        density: str = "medium") -> dict[str, Any]:
     prof = resin_profiles(uvtools_path, override_dir)
     if prof.get("error"):
         return {"error": prof["error"]}
@@ -420,8 +429,27 @@ def auto_resin_profiles(uvtools_path: str, override_dir: str, printer_model: str
     if not best or score < 2:
         return {"error": f"Не найден профиль смолы для «{printer_model}» — выберите вручную"}
     prints = prof["prints"]
-    pr = (next((p for p in prints if "0.05" in p["name"] and "medium" in p["name"].lower()), None)
+    dens = {"light": "light", "medium": "medium", "heavy": "heavy"}.get(density, "medium")
+    pr = (next((p for p in prints if "0.05" in p["name"] and dens in p["name"].lower()), None)
           or next((p for p in prints if "0.05" in p["name"]), None) or (prints[0] if prints else None))
     if not pr:
         return {"error": "Не найдены профили печати смолы"}
     return {"printer": best, "print": pr}
+
+
+def support_overrides(mode: str, overhang_cm2: float, support_type: str = "tree", plate_only: bool = False,
+                      angle: Optional[int] = None) -> tuple[dict[str, Any], str]:
+    """Решает, нужны ли поддержки. Возвращает (параметры для профиля печати, пояснение)."""
+    if mode == "off":
+        return {"enable_support": "0"}, "выключены в настройках"
+    if mode == "auto" and overhang_cm2 < 0.5:
+        return {"enable_support": "0"}, "не нужны — нависаний почти нет"
+    ov: dict[str, Any] = {"enable_support": "1",
+                          "support_type": "normal(auto)" if support_type == "normal" else "tree(auto)",
+                          "support_on_build_plate_only": "1" if plate_only else "0"}
+    if angle:
+        ov["support_threshold_angle"] = str(int(angle))
+    kind = "обычные" if support_type == "normal" else "древовидные"
+    where = "только от стола" if plate_only else "от стола и от модели"
+    why = f", нависания {overhang_cm2:.1f} см²" if overhang_cm2 else ""
+    return ov, f"включены: {kind}, {where}{why}"

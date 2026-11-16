@@ -555,7 +555,10 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
                 process=body.get("process", ""), filaments=body.get("filaments") or [],
                 work_dir=str(data / "slicing"), arrange=bool(body.get("arrange", True)),
                 orient=bool(body.get("orient", False)), profiles_dir=s.get("slicer_profiles_dir", ""),
-                bed_type=body.get("bed_type", ""), plate=int(body.get("plate") or 0))
+                bed_type=body.get("bed_type", ""), plate=int(body.get("plate") or 0),
+                process_overrides=slicermod.support_overrides(
+                    body.get("supports") or "on", 0.0, body.get("support_type") or "tree",
+                    bool(body.get("support_plate_only")))[0] if body.get("supports") else None)
         except Exception as e:  # noqa: BLE001
             raise err(e) from e
         stem = Path(it["filename"]).stem
@@ -579,13 +582,22 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         except Exception as e:  # noqa: BLE001
             raise err(e) from e
         new = await asyncio.to_thread(save_mesh_version, it, m2, "_ready", False, bv)
+        tech = cfg.technology if cfg else "fdm"
+        if tech == "resin":
+            dens = {"light": "лёгкие", "medium": "средние", "heavy": "тяжёлые"}.get(o.get("resin_supports") or "medium", "средние")
+            steps.append({"step": "Поддержки", "ok": True, "detail": f"для смолы нужны всегда — плотность: {dens}"})
+            sup_ov = {}
+        else:
+            sup_ov, sup_text = slicermod.support_overrides(
+                o.get("supports") or "auto", rep.overhang_area_cm2, o.get("support_type") or "tree",
+                bool(o.get("support_plate_only")), o.get("support_angle"))
+            steps.append({"step": "Поддержки", "ok": True, "detail": sup_text})
         result: dict[str, Any] = {"steps": steps, "mesh_item_id": new["id"], "report": rep.to_dict(),
                                   "printable": rep.printable, "sliced_item_id": None, "summary": None}
         await mgr.broadcast({"type": "library_changed"})
         if not rep.printable or o.get("slice") is False:
             return result
         s = db.get_settings()
-        tech = cfg.technology if cfg else "fdm"
         model = (cfg.model if cfg else "") or ""
         try:
             if tech == "resin":
@@ -595,7 +607,8 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
                     steps.append({"step": "Нарезка", "ok": False, "detail": "для смолы установите PrusaSlicer и UVtools "
                                   "(или нарежьте модель в Chitubox / Photon Workshop)"})
                     return result
-                prof = await asyncio.to_thread(slicermod.auto_resin_profiles, uv, s.get("resin_profiles_dir", ""), model)
+                prof = await asyncio.to_thread(slicermod.auto_resin_profiles, uv, s.get("resin_profiles_dir", ""), model,
+                                               o.get("resin_supports") or "medium")
                 if o.get("resin_printer"):
                     prof = {"printer": {"path": o["resin_printer"], "name": Path(o["resin_printer"]).stem},
                             "print": {"path": o.get("resin_print") or (prof.get("print") or {}).get("path", ""), "name": ""}}
@@ -624,7 +637,8 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
                     s.get("slicer_path", ""), new["stored_path"], machine=machine, process=process,
                     filaments=[filament] if filament else [], work_dir=str(data / "slicing"), arrange=False,
                     orient=False, profiles_dir=s.get("slicer_profiles_dir", ""),
-                    bed_type=o.get("bed_type") if o.get("bed_type") is not None else prof.get("bed_type", ""))
+                    bed_type=o.get("bed_type") if o.get("bed_type") is not None else prof.get("bed_type", ""),
+                    process_overrides=sup_ov)
                 fname = f"{Path(it['filename']).stem}.gcode.3mf"
                 steps.append({"step": "Профили", "ok": True, "detail": " · ".join(
                     Path(p).stem for p in (machine, process, filament) if p)})
