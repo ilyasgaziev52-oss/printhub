@@ -72,7 +72,12 @@ async def test_missing_checksum_refused(tmp_path):
     assert r["status"] == "error" and "SHA-256" in r["error"]
 
 
-async def test_disabled_without_source(tmp_path):
+async def test_disabled_without_source(tmp_path, monkeypatch):
+    from printhub import build_info
+    monkeypatch.setattr(build_info, "UPDATE_REPO", "")
+    monkeypatch.setattr(build_info, "UPDATE_URL", "")
+    monkeypatch.delenv("PRINTHUB_UPDATE_REPO", raising=False)
+    monkeypatch.delenv("PRINTHUB_UPDATE_URL", raising=False)
     upd = Updater(tmp_path, lambda: {}, is_busy=lambda: False)
     st = await upd.check()
     assert st["status"] == "disabled" and not st["installed"]
