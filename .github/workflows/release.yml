@@ -1,16 +1,18 @@
-# Выпуск новой версии: git tag v0.2.1 && git push origin v0.2.1
-# Собирает PrintHub-Setup-<версия>.exe и публикует релиз GitHub.
-# Установленные копии PrintHub находят этот релиз и обновляются сами.
+# Выпуск новой версии: поднимите __version__ в printhub/__init__.py и отправьте в main
+# (или отправьте тег vX.Y.Z). Сценарий соберёт PrintHub-Setup-<версия>.exe и опубликует
+# релиз GitHub. Установленные копии PrintHub находят этот релиз и обновляются сами.
 name: release
 
 on:
   push:
+    branches: [main]
+    paths: ["printhub/__init__.py"]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Версия (например 0.2.1)"
-        required: true
+        description: "Версия (например 0.2.3); пусто — из printhub/__init__.py"
+        required: false
 
 permissions:
   contents: write
@@ -21,35 +23,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Версия
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ github.event.inputs.version }}"
+          if [ -z "$V" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; fi
+          if [ -z "$V" ]; then V=$(python3 -c 'import re;print(re.search(r"\"(.+)\"", open("printhub/__init__.py").read()).group(1))'); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if gh release view "v$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Релиз v$V уже есть — пропускаю"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.v.outputs.skip != '1'
         with:
           python-version: "3.13"
 
       - name: Инструменты сборки
+        if: steps.v.outputs.skip != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y nsis gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 unzip
           pip install -r requirements-dev.txt pillow
 
       - name: Тесты
+        if: steps.v.outputs.skip != '1'
         run: pytest -q
 
-      - name: Версия
-        id: v
-        run: |
-          V="${{ github.event.inputs.version }}"
-          [ -z "$V" ] && V="${GITHUB_REF_NAME#v}"
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-
       - name: Сборка установщика
+        if: steps.v.outputs.skip != '1'
         env:
           UPDATE_REPO: ${{ github.repository }}
         run: ./packaging/build_windows.sh "${{ steps.v.outputs.version }}"
 
       - name: Публикация релиза
+        if: steps.v.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           V="${{ steps.v.outputs.version }}"
           gh release create "v$V" "dist/PrintHub-Setup-$V.exe" "dist/PrintHub-Setup-$V.exe.sha256" \
-            --title "PrintHub $V" --generate-notes
+            --target "$GITHUB_SHA" --title "PrintHub $V" --generate-notes
