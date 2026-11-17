@@ -202,13 +202,14 @@ def build() -> dict[str, Manifold]:
     plat = Manifold.extrude(stadium(PLAT_W, PLAT_D, PLAT_R), PLAT_H).translate((0, 0, BASE_H))
     peg = cyl(3.4, 2.0, PUMP[0], PUMP[1], Z0, 48)
     pipe = cyl(6.0, 2.0, PIPE_X, 0, Z0)                                  # фланец у основания
-    pipe += cyl(3.8, 44 - Z0, PIPE_X, 0, Z0 + 1)                         # вертикальная труба
-    pipe += cyl(4.8, 2.5, PIPE_X, 0, 32)                                 # муфта
-    elbow = quarter_torus(6.0, 3.8).rotate((90, 0, 0)).mirror((1, 0, 0)).translate((PIPE_X + 6, 0, 44))
-    pipe_end = PUMP[0] - 11.0 - 0.3                                      # торец у корпуса насоса
-    pipe += elbow + rod_x(3.8, PIPE_X + 6 - 0.01, pipe_end, 0, 50)
-    pipe += rod_x(5.0, -17.0, -15.2, 0, 50)                              # фланец на горизонтали
-    pipe += rod_x(4.6, pipe_end - 1.5, pipe_end, 0, 50)                  # фланец у насоса
+    PIPE_Z = 47.0                                                        # ось горизонтальной трубы (ниже кольца насоса)
+    pipe += cyl(3.8, PIPE_Z - 6 - Z0, PIPE_X, 0, Z0 + 1)                 # вертикальная труба
+    pipe += cyl(4.8, 2.5, PIPE_X, 0, 30)                                 # муфта
+    elbow = quarter_torus(6.0, 3.8).rotate((90, 0, 0)).mirror((1, 0, 0)).translate((PIPE_X + 6, 0, PIPE_Z - 6))
+    pipe_end = PUMP[0] - 8.0                                             # заходит в корпус; подрезается по насосу ниже
+    pipe += elbow + rod_x(3.8, PIPE_X + 6 - 0.01, pipe_end, 0, PIPE_Z)
+    pipe += rod_x(5.0, -17.0, -15.2, 0, PIPE_Z)                          # фланец на горизонтали
+    pipe += rod_x(4.6, PUMP[0] - 11.8, pipe_end, 0, PIPE_Z)             # фланец у насоса
     parts["1_площадка_и_труба_серый"] = plat + peg + pipe
 
     # ограждение (жёлтый): по бокам и сзади
@@ -243,6 +244,8 @@ def build() -> dict[str, Manifold]:
     pump -= cyl(3.7, 2.4, px, py, Z0 - 0.01, 48)                        # гнездо под штырь площадки
     label = wrap_on_cylinder(text_section("SULZER", 3.6, 0.15), (px, py), 10.03, Z0 + 20.0, EMBOSS)
     parts["2_насос_красный"] = pump - label
+    # труба прилегает к корпусу насоса без зазора: торец подрезан точно по форме насоса
+    parts["1_площадка_и_труба_серый"] = parts["1_площадка_и_труба_серый"] - pump - label
     parts["2_надпись_SULZER_белый"] = label
 
     # шланг (чёрный), как на фото: выходит из верхней крышки насоса, плавной дугой перекидывается вправо
