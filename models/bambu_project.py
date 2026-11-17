@@ -70,6 +70,10 @@ def finalize(exported: Path, dst: Path, spec: dict[str, Any]) -> None:
     ms = files["Metadata/model_settings.config"].decode()
     obj_blocks = re.findall(r'<object id="(\d+)">(.*?)</object>', ms, re.S)
     assert len(obj_blocks) == len(objects), f"объектов в проекте {len(obj_blocks)}, в описании {len(objects)}"
+    # Bambu Studio не всегда сохраняет объекты в исходном порядке — сопоставляем по имени объекта
+    by_name = {re.search(r'<metadata key="name" value="([^"]*)"/>', body).group(1): (oid, body) for oid, body in obj_blocks}
+    if all(o.get("name") in by_name for o in objects) and len(by_name) == len(objects):
+        obj_blocks = [by_name[o["name"]] for o in objects]
     new_ms = ms
     for (oid, body), o in zip(obj_blocks, objects):
         parts = re.findall(r'<part id="(\d+)"(.*?)</part>', body, re.S)
