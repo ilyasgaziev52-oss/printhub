@@ -311,12 +311,14 @@ def epiroc() -> dict:
             {"name": "Epiroc — подставка", "plate": 1, "parts": [
                 ("Подставка", b, "brown"), ("Надпись iGateway", signs, "white"), ("Камни", st, "grey"),
                 ("Пика", chisel, "black")]},
-            {"name": "Epiroc — молот", "plate": 2, "parts": [
+            # шланги и молот на одной пластине, но печатаются по очереди («по объектам»):
+            # сначала шланги (ниже 25 мм — проходят под балкой A1), потом молот — без смены цвета на каждом слое
+            {"name": "Epiroc — шланги", "plate": 2, "offset": (-55, 0), "parts": [("Шланги", hoses, "black")]},
+            {"name": "Epiroc — молот", "plate": 2, "offset": (55, 0), "parts": [
                 ("Корпус", body, "yellow"), ("Оголовок и надпись", head + txt, "black")]},
-            # шланги отдельно: иначе молот менял бы цвет на каждом слое по всей высоте шлангов
-            {"name": "Epiroc — шланги", "plate": 3, "parts": [("Шланги", hoses, "black")]},
         ],
-        "plate_names": {"1": "Подставка", "2": "Молот", "3": "Шланги"},
+        "print_sequence": "by object",
+        "plate_names": {"1": "Подставка", "2": "Молот и шланги"},
         "note": "молот надевается гнездом на штырь пики, шланги приклеиваются к боку молота",
     }
 
@@ -348,7 +350,7 @@ def make(name: str, out: Path) -> tuple[Path, dict]:
             for _, t in meshes:
                 t.apply_translation((-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2, 0))
         assemblies.append((o["name"], meshes, (100.0 + 60 * i, 128.0)))
-        spec_objects.append({"name": o["name"], "plate": o["plate"],
+        spec_objects.append({"name": o["name"], "plate": o["plate"], "offset": o.get("offset", (0, 0)),
                              "parts": [{"name": pn, "filament": colors.index(col) + 1} for (pn, _), (_, _, col) in zip(meshes, o["parts"])]})
         lo = np.min([t.bounds[0] for _, t in meshes], axis=0)
         hi = np.max([t.bounds[1] for _, t in meshes], axis=0)
@@ -358,6 +360,8 @@ def make(name: str, out: Path) -> tuple[Path, dict]:
     write_3mf(generic, assemblies, fig["title"])
     spec = {"bed": [256, 256], "bed_type": "Textured PEI Plate", "supports": "tree(auto)",
             "colors": [HEX[c] for c in colors], "plate_names": fig["plate_names"], "objects": spec_objects}
+    if fig.get("print_sequence"):
+        spec["print_sequence"] = fig["print_sequence"]
     return generic, spec
 
 

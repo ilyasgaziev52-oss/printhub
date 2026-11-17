@@ -116,6 +116,8 @@ def finalize(exported: Path, dst: Path, spec: dict[str, Any]) -> None:
     if spec.get("supports"):
         ps["enable_support"] = "1"
         ps["support_type"] = spec["supports"]
+    if spec.get("print_sequence"):
+        ps["print_sequence"] = spec["print_sequence"]   # «by object»: детали пластины печатаются по очереди
     ps["flush_into_infill"] = "1"   # промывка при смене цвета уходит в заполнение, а не в отходы
     files["Metadata/project_settings.config"] = json.dumps(ps, ensure_ascii=False, indent=4).encode()
 
