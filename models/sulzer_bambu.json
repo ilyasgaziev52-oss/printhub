@@ -1,0 +1,22 @@
+{
+  "printer": "Bambu Lab A1 0.4 nozzle",
+  "process": "0.16mm Optimal @BBL A1",
+  "filament": "Bambu PLA Basic @BBL A1",
+  "bed": [256, 256],
+  "bed_type": "Textured PEI Plate",
+  "supports": "tree(auto)",
+  "colors": ["#6E3E28", "#F5F5F5", "#A5AAB0", "#F5C814", "#D21E23", "#1E1E20"],
+  "plate_names": {"1": "Подставка", "2": "Насос", "3": "Шланг"},
+  "objects": [
+    {"name": "Sulzer — подставка", "plate": 1, "parts": [
+      {"name": "Подставка — коричневый", "filament": 1},
+      {"name": "Надпись iGateway — белый", "filament": 2},
+      {"name": "Площадка и труба — серый", "filament": 3},
+      {"name": "Ограждение — жёлтый", "filament": 4}]},
+    {"name": "Sulzer — насос", "plate": 2, "parts": [
+      {"name": "Насос — красный", "filament": 5},
+      {"name": "Надпись SULZER — белый", "filament": 2}]},
+    {"name": "Sulzer — шланг", "plate": 3, "parts": [
+      {"name": "Шланг — чёрный", "filament": 6}]}
+  ]
+}

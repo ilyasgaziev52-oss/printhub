@@ -312,10 +312,15 @@ def main(out_dir: str) -> None:
             t.export(out / "stl" / f"{name}.stl")
     # две модели рядом на столе 256×256: подставка слева, насос справа
     part1 = [(PART_NAMES[n], t) for n, t in meshes.items() if n.startswith("1_")]
-    part2 = [(PART_NAMES[n], t.copy().apply_translation((-PUMP[0], -PUMP[1], 0))) for n, t in meshes.items() if n.startswith("2_")]
+    shift = (-PUMP[0], -PUMP[1], 0)
+    part2 = [(PART_NAMES[n], meshes[n].copy().apply_translation(shift)) for n in ("2_насос_красный", "2_надпись_SULZER_белый")]
+    hose = meshes["2_шланг_чёрный"].copy()
+    hose.apply_translation((-hose.bounds[:, 0].mean(), -hose.bounds[:, 1].mean(), 0))
+    # шланг — отдельная одноцветная деталь: иначе смена цвета на каждом слое насоса
     write_3mf(out / "Sulzer_iGateway.3mf", [
         ("Sulzer - подставка", part1, (100.0, 128.0)),
-        ("Sulzer - насос", part2, (205.0, 128.0)),
+        ("Sulzer - насос", part2, (190.0, 128.0)),
+        ("Sulzer - шланг", [(PART_NAMES["2_шланг_чёрный"], hose)], (225.0, 128.0)),
     ], "Sulzer iGateway")
 
 
