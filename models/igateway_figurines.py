@@ -187,25 +187,39 @@ def enerpac() -> dict:
     JX, JY = -16.0, 3.0
     peg = cyl(3.4, 2.0, JX, JY, Z0, 48)
 
-    # гайковёрт Norbar (как на фото): кольцо с отверстием слева внизу, широкий верх и длинный «хвост»,
-    # опускающийся вправо; под хвостом пусто; края скруглены ступеньками
-    WX, wfront, wt = 5.0, -18.0, 13.0
-    ring = CrossSection.circle(9.0, 96).translate((0, 9))
-    corner = CrossSection.circle(4.0, 48).translate((-5, 21))
-    prof = CrossSection.batch_hull([ring, corner]) + CrossSection.batch_hull([
-        corner, CrossSection.circle(3.5, 48).translate((15, 21.5)),
-        CrossSection.circle(2.6, 32).translate((28, 9)), CrossSection.circle(4.0, 48).translate((6, 11))])
-    prof -= CrossSection.circle(4.6, 64).translate((-0.5, 9))
-    wrench = Manifold()
-    for y0, y1, inset in ((0, 0.6, 1.1), (0.6, 1.2, 0.45), (1.2, wt - 1.2, 0), (wt - 1.2, wt - 0.6, 0.45), (wt - 0.6, wt, 1.1)):
-        sec = prof.offset(-inset, JoinType.Round, 2.0, 32) if inset else prof
-        wrench += Manifold.extrude(sec, y1 - y0 + 0.01).rotate((90, 0, 0)).translate((WX, wfront + y1, Z0))
-    ncs = fit_text("NORBAR", 3.0, 15.0).rotate(-8).translate((WX + 6.0, 0))
-    norbar = on_front_face(ncs, wfront, Z0 + 16.3, EMB, inset=0.4)
-    wrench -= norbar
+    # гайковёрт Norbar — по замерам с фото. Строится в своей системе координат (центр отверстия x=0, лицевая
+    # грань y=-wt/2), потом поворачивается лицом влево-вперёд (виден левый торец с окошком), как на фото.
+    wt, rf = 14.0, 2.6                                    # толщина и радиус скругления кромок
+    # точки сняты с фото (мм от центра отверстия): верх и низ хвоста идут под наклоном вниз-вправо.
+    # Форма = две выпуклые части, каждая — оболочка «дисков» со скруглённой кромкой (радиус rf) на обеих гранях.
+    def rdisc(cx: float, cz: float, r: float, y: float) -> Manifold:
+        sec = CrossSection.batch_hull([CrossSection.circle(rf, 32).translate((r - rf, 0)),
+                                       CrossSection.square((0.01, 2 * rf)).translate((0, -rf))])
+        return Manifold.revolve(sec, 96).rotate((90, 0, 0)).translate((cx, y, cz))
+
+    def rslab(circles: list[tuple[float, float, float]]) -> Manifold:
+        ye = wt / 2 - rf
+        return Manifold.batch_hull([rdisc(cx, cz, r, y) for cx, cz, r in circles for y in (-ye, ye)])
+
+    C_RING, C_CORNER = (0, 9.6, 9.6), (-4.1, 22.2, 5.5)
+    w_local = rslab([C_RING, C_CORNER]) + rslab([C_CORNER, (20, 22.4, 3.5), (34, 6.5, 2.5), (13.7, 14.0, 3.7)])
+    hole = Manifold.cylinder(wt + 2, 4.6, 4.6, 64).rotate((90, 0, 0)).translate((0, wt / 2 + 1, 9.6))
+    # фаски по краям отверстия
+    hole += Manifold.cylinder(1.61, 4.6, 6.2, 64).rotate((90, 0, 0)).translate((0, -wt / 2 + 1.6, 9.6))
+    hole += Manifold.cylinder(1.61, 4.6, 6.2, 64).rotate((-90, 0, 0)).translate((0, wt / 2 - 1.6, 9.6))
+    w_local = (w_local - hole).translate((0, 0, -1.0)) - box(-50, 50, -50, 50, -10, -0.3)   # ровное дно, утоплено на 0.3
+    w_local -= box(-10.0, -8.4, -4.0, 4.0, 18.5, 24.5)    # окошко на левом торце
+    ncs = fit_text("NORBAR", 3.1, 18.8).rotate(-14).translate((11.3, 0))
+    n_local = on_front_face(ncs, -wt / 2, 18.3, 0.45, inset=0.4)
+    w_local -= n_local
+    blk_local = Manifold.extrude(stadium(18, wt - 3, 2.0), 10.0).translate((24.0, 0, 0)) - w_local - n_local
+
+    def place_w(m: Manifold) -> Manifold:
+        return m.rotate((0, 0, 15)).translate((5.0, -10.0, Z0))
+    wrench, norbar, wblock = place_w(w_local), place_w(n_local), place_w(blk_local)
 
     # шуруповёрт (чёрный): корпус, рукоятка, батарея; серая ступенчатая насадка смотрит влево над гайковёртом
-    DY, DZ = 7.0, Z0 + 31
+    DY, DZ = 12.5, Z0 + 31
     nozzle = rod_x(4.2, 17, 21, DY, DZ) + rod_x(2.4, 10, 17.1, DY, DZ) + rod_x(1.3, 6.5, 10.1, DY, DZ)
     drill = capsule((23, DY, DZ), (38, DY, DZ), 6.0, 48)
     drill += capsule((36, DY, DZ - 3), (35, DY, Z0 + 8), 4.0, 32)
@@ -225,10 +239,8 @@ def enerpac() -> dict:
 
     # шланг: из штуцера влево, петлёй по площадке вперёд, за кольцом гайковёрта — к чёрному упору под его хвостом
     hose = tube([(JX - 14.5, JY, Z0 + 7), (-34, 4, Z0 + 7), (-40, -4, Z0 + 4), (-35, -14.5, Z0 + 2), (-22, -16.5, Z0 + 2),
-                 (-11, -13, Z0 + 2), (-5, -4, Z0 + 2), (6, -2.6, Z0 + 2), (18, -3.5, Z0 + 2)], 2.1, 6)
-    block = Manifold.extrude(stadium(17, 14, 2.0), 9.0).translate((WX + 19.5, wfront + 8.5, Z0))
-    block -= wrench + norbar
-    hose = (hose - (plat + wrench + jack + ram)) + block
+                 (-11, -13, Z0 + 2), (-6, -3, Z0 + 2), (6, 1.5, Z0 + 2), (15, 3.5, Z0 + 2), (24, 0.0, Z0 + 2)], 2.1, 6)
+    hose = (hose - (plat + wrench + jack + ram)) + wblock
     return {
         "title": "Enerpac Norbar iGateway",
         "colors": ["brown", "white", "grey", "black", "yellow"],
@@ -376,7 +388,7 @@ FIGURINES = {"Sulzer": sulzer, "IngersollRand": ingersoll, "Enerpac_Norbar": ene
 
 def to_mesh(m: Manifold) -> trimesh.Trimesh:
     mm = m.to_mesh()
-    return trimesh.Trimesh(np.asarray(mm.vert_properties)[:, :3], np.asarray(mm.tri_verts), process=True)
+    return trimesh.Trimesh(np.asarray(mm.vert_properties)[:, :3], np.asarray(mm.tri_verts), process=False)
 
 
 def check_assembly(name: str, fig: dict) -> list[str]:
