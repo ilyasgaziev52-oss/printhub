@@ -184,7 +184,7 @@ def build() -> dict[str, Manifold]:
     pipe += cyl(3.8, 44 - Z0, PIPE_X, 0, Z0 + 1)                         # вертикальная труба
     pipe += cyl(4.8, 2.5, PIPE_X, 0, 32)                                 # муфта
     elbow = quarter_torus(6.0, 3.8).rotate((90, 0, 0)).mirror((1, 0, 0)).translate((PIPE_X + 6, 0, 44))
-    pipe_end = PUMP[0] - 10.0 - 0.3                                      # торец у корпуса насоса
+    pipe_end = PUMP[0] - 11.0 - 0.3                                      # торец у корпуса насоса
     pipe += elbow + rod_x(3.8, PIPE_X + 6 - 0.01, pipe_end, 0, 50)
     pipe += rod_x(5.0, -17.0, -15.2, 0, 50)                              # фланец на горизонтали
     pipe += rod_x(4.6, pipe_end - 1.5, pipe_end, 0, 50)                  # фланец у насоса
