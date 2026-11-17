@@ -187,16 +187,21 @@ def enerpac() -> dict:
     JX, JY = -16.0, 3.0
     peg = cyl(3.4, 2.0, JX, JY, Z0, 48)
 
-    # гайковёрт Norbar: «сапог» — кольцо с отверстием слева внизу, верх скошен вверх-вправо
-    WX, wfront, wt = 2.0, -18.0, 13.0
-    prof = CrossSection.batch_hull([CrossSection.circle(9.0, 96).translate((0, 9)),
-                                    CrossSection.circle(6.0, 64).translate((18.5, 18)),
-                                    CrossSection.circle(4.0, 48).translate((21, 4)),
-                                    CrossSection.square((24, 3)).translate((-4, 0))])
-    prof -= CrossSection.circle(4.6, 64).translate((0, 9))
-    wrench = Manifold.extrude(prof, wt).rotate((90, 0, 0)).translate((WX, wfront + wt, Z0))
-    ncs = fit_text("NORBAR", 2.5, 12.0).translate((0, -1.25)).rotate(19).translate((WX + 12.5, 0))
-    norbar = on_front_face(ncs, wfront, Z0 + 15.2, EMB, inset=0.4)
+    # гайковёрт Norbar (как на фото): кольцо с отверстием слева внизу, широкий верх и длинный «хвост»,
+    # опускающийся вправо; под хвостом пусто; края скруглены ступеньками
+    WX, wfront, wt = 5.0, -18.0, 13.0
+    ring = CrossSection.circle(9.0, 96).translate((0, 9))
+    corner = CrossSection.circle(4.0, 48).translate((-5, 21))
+    prof = CrossSection.batch_hull([ring, corner]) + CrossSection.batch_hull([
+        corner, CrossSection.circle(3.5, 48).translate((15, 21.5)),
+        CrossSection.circle(2.6, 32).translate((28, 9)), CrossSection.circle(4.0, 48).translate((6, 11))])
+    prof -= CrossSection.circle(4.6, 64).translate((-0.5, 9))
+    wrench = Manifold()
+    for y0, y1, inset in ((0, 0.6, 1.1), (0.6, 1.2, 0.45), (1.2, wt - 1.2, 0), (wt - 1.2, wt - 0.6, 0.45), (wt - 0.6, wt, 1.1)):
+        sec = prof.offset(-inset, JoinType.Round, 2.0, 32) if inset else prof
+        wrench += Manifold.extrude(sec, y1 - y0 + 0.01).rotate((90, 0, 0)).translate((WX, wfront + y1, Z0))
+    ncs = fit_text("NORBAR", 3.0, 15.0).rotate(-8).translate((WX + 6.0, 0))
+    norbar = on_front_face(ncs, wfront, Z0 + 16.3, EMB, inset=0.4)
     wrench -= norbar
 
     # шуруповёрт (чёрный): корпус, рукоятка, батарея; серая ступенчатая насадка смотрит влево над гайковёртом
@@ -220,7 +225,7 @@ def enerpac() -> dict:
 
     # шланг: из штуцера влево, петлёй по площадке к кольцу гайковёрта
     hose = tube([(JX - 14.5, JY, Z0 + 7), (-34, 4, Z0 + 7), (-40, -4, Z0 + 4), (-35, -14.5, Z0 + 2), (-22, -16.5, Z0 + 2),
-                 (-12, -15, Z0 + 2), (-6.5, -11.5, Z0 + 4.5)], 2.1, 6)
+                 (-12, -15, Z0 + 2), (-2.5, -11.5, Z0 + 4.5)], 2.1, 6)
     hose -= plat + wrench + jack + ram
     return {
         "title": "Enerpac Norbar iGateway",
