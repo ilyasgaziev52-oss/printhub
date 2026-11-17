@@ -20,7 +20,7 @@ import trimesh
 from manifold3d import CrossSection, JoinType, Manifold
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from sulzer_pump import (cyl, on_front_face, rod_x, rod_y, stadium, swirl_section,  # noqa: E402
+from sulzer_pump import (capsule, cyl, on_front_face, tube, rod_x, rod_y, stadium, swirl_section,  # noqa: E402
                          text_section, wrap_on_cylinder, write_3mf)
 
 HEX = {"brown": "#6E3E28", "white": "#F5F5F5", "grey": "#A5AAB0", "yellow": "#F5C814",
@@ -51,27 +51,6 @@ def fit_text(text: str, cap: float, max_w: float) -> CrossSection:
     if x1 - x0 > max_w:
         cs = text_section(text, cap * max_w / (x1 - x0), 0.12)
     return cs
-
-
-def capsule(p0, p1, r: float, seg: int = 24) -> Manifold:
-    return Manifold.batch_hull([Manifold.sphere(r, seg).translate(tuple(p0)), Manifold.sphere(r, seg).translate(tuple(p1))])
-
-
-def tube(points: list[tuple[float, float, float]], r: float, samples: int = 6) -> Manifold:
-    """Гибкий шланг: сглаженная (Catmull-Rom) линия через точки, собранная из капсул."""
-    P = np.array(points, dtype=float)
-    P = np.vstack([P[0] * 2 - P[1], P, P[-1] * 2 - P[-2]])
-    pts = []
-    for i in range(1, len(P) - 2):
-        p0, p1, p2, p3 = P[i - 1], P[i], P[i + 1], P[i + 2]
-        for k in range(samples):
-            t = k / samples
-            pts.append(0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3))
-    pts.append(P[-2])
-    m = Manifold()
-    for a, b in zip(pts, pts[1:]):
-        m += capsule(a, b, r)
-    return m
 
 
 def box(x0, x1, y0, y1, z0, z1) -> Manifold:

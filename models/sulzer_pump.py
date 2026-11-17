@@ -54,6 +54,27 @@ def stadium(w: float, d: float, rad: float) -> CrossSection:
     return CrossSection.square((w - 2 * rad, d - 2 * rad), True).offset(rad, JoinType.Round, 2.0, SEG)
 
 
+def capsule(p0, p1, r: float, seg: int = 24) -> Manifold:
+    return Manifold.batch_hull([Manifold.sphere(r, seg).translate(tuple(p0)), Manifold.sphere(r, seg).translate(tuple(p1))])
+
+
+def tube(points, r: float, samples: int = 6) -> Manifold:
+    """Гибкий шланг: сглаженная (Catmull-Rom) линия через точки, собранная из капсул."""
+    P = np.array(points, dtype=float)
+    P = np.vstack([P[0] * 2 - P[1], P, P[-1] * 2 - P[-2]])
+    pts = []
+    for i in range(1, len(P) - 2):
+        p0, p1, p2, p3 = P[i - 1], P[i], P[i + 1], P[i + 2]
+        for k in range(samples):
+            t = k / samples
+            pts.append(0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3))
+    pts.append(P[-2])
+    m = Manifold()
+    for a, b in zip(pts, pts[1:]):
+        m += capsule(a, b, r)
+    return m
+
+
 # ---------------------------------------------------------------- текст
 class _FlatPen(BasePen):
     def __init__(self, glyph_set, steps: int = 10):
@@ -224,12 +245,12 @@ def build() -> dict[str, Manifold]:
     parts["2_насос_красный"] = pump - label
     parts["2_надпись_SULZER_белый"] = label
 
-    # шланг (чёрный): из верхней части насоса — дуга — вниз к площадке
-    hz = Z0 + 36.0
-    hose = rod_x(2.2, px + 6.0, HOSE_X - 8.0, py, hz)
-    bend = quarter_torus(8.0, 2.2).rotate((90, 0, 0)).rotate((0, -90, 0)).mirror((1, 0, 0)).translate((HOSE_X - 8.0, py, hz - 8.0))
-    hose += bend + cyl(2.2, hz - 8.0 - Z0 + 0.01, HOSE_X, py, Z0)
-    hose += cyl(3.0, 2.0, HOSE_X, py, Z0, 32)                            # хомут у площадки
+    # шланг (чёрный), как на фото: выходит из верхней крышки насоса, плавной дугой перекидывается вправо
+    # и свободно, чуть изгибаясь, спускается к площадке; внизу хомут
+    hose = tube([(px + 4.0, py, Z0 + 39.0), (px + 9.5, py, Z0 + 42.8), (px + 15.0, py - 0.5, Z0 + 40.0),
+                 (px + 17.8, py - 1.0, Z0 + 31.0), (px + 18.6, py - 1.8, Z0 + 19.0), (px + 18.2, py - 2.6, Z0 + 9.0),
+                 (px + 19.5, py - 3.2, Z0 + 3.0)], 2.5, 8)
+    hose += cyl(2.5, 3.0, px + 19.5, py - 3.2, Z0, 48) + cyl(3.3, 2.2, px + 19.5, py - 3.2, Z0, 48)   # хомут у площадки
     parts["2_шланг_чёрный"] = hose - pump - label
 
     return parts
