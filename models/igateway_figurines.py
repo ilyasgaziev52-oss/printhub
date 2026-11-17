@@ -39,14 +39,50 @@ def back_sign(text: str, w: float, d: float, r: float = 14.0) -> Manifold:
 
 
 def base(w: float, d: float, r: float = 14.0, back: str | None = None) -> tuple[Manifold, Manifold]:
-    """Коричневая подставка с белыми логотипом и надписью iGateway спереди и названием бренда сзади."""
-    b = Manifold.extrude(stadium(w, d, r), BASE_H)
+    """Подставка «премиум»: цоколь-ступенька, фаска по верхней кромке, утопленная панель с логотипом и iGateway
+    спереди, название бренда сзади. Возвращает (подставка, надписи)."""
+    plinth = Manifold.extrude(stadium(w + 5, d + 5, r + 2.5), 3.0)
+    body = Manifold.extrude(stadium(w, d, r), BASE_H - 5.0).translate((0, 0, 3.0))
+    chamfer = Manifold.extrude(stadium(w, d, r), 2.0, 0, 0, ((w - 4) / w, (d - 4) / d)).translate((0, 0, BASE_H - 2.0))
+    b = plinth + body + chamfer
     front = -d / 2
-    signs = on_front_face(text_section("iGateway", 6.2, 0.15), front, 3.0, EMB)
-    signs += on_front_face(swirl_section(7.5), front, 12.6, EMB)
+    pw = min(68.0, w - 2 * r - 4)
+    b -= box(-pw / 2, pw / 2, front - 1, front + 0.8, 4.5, 15.5)                 # утопленная панель
+    txt = fit_text("iGateway", 5.2, pw - 20)
+    x0, _, x1, _ = txt.bounds()
+    signs = on_front_face(txt.translate((4.0, 0)), front + 0.8, 6.2, EMB)
+    signs += on_front_face(swirl_section(5.6).translate((4.0 - (x1 - x0) / 2 - 5.0, 0)), front + 0.8, 9.2, EMB)
     if back:
         signs += back_sign(back, w, d, r)
     return b - signs, signs
+
+
+def top_clip(w: float, d: float, r: float = 14.0) -> Manifold:
+    """Область на верхней грани подставки (внутри фаски) — для камней."""
+    return Manifold.extrude(stadium(w - 6, d - 6, r - 3), 25).translate((0, 0, BASE_H - 0.01))
+
+
+def platform_details(z_top: float, avoid: list[Manifold], w: float = 88.0, d: float = 40.0) -> tuple[Manifold, Manifold]:
+    """Рифлёный лист и болты на площадке (тот же цвет, что площадка) + выступающие диагональные полосы на кромке
+    (сигнальная полоса). Под отдельными деталями (avoid) рифление убрано, чтобы они стояли ровно."""
+    tex = Manifold()
+    for i in range(-int(w / 5.6), int(w / 5.6) + 1):
+        for j in range(-int(d / 5.6), int(d / 5.6) + 1):
+            ang = 45 if (i + j) % 2 == 0 else -45
+            tex += Manifold.cube((2.2, 0.7, 0.35), True).rotate((0, 0, ang)).translate((i * 2.8, j * 2.8, z_top + 0.17))
+    tex = tex ^ Manifold.extrude(stadium(w - 4, d - 4, 4), 1).translate((0, 0, z_top - 0.1))
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            tex += Manifold.cylinder(0.9, 1.3, 1.3, 6).translate((sx * (w / 2 - 8.0), sy * (d / 2 - 6.0), z_top))
+    if avoid:
+        foot = sum((m.project() for m in avoid), CrossSection()).offset(1.2, JoinType.Round, 2.0, 16)
+        tex -= Manifold.extrude(foot, 3).translate((0, 0, z_top - 1))
+    ring = Manifold.extrude(stadium(w + 0.6, d + 0.6, 6.3), 2.0).translate((0, 0, z_top - 2.5)) - \
+        Manifold.extrude(stadium(w, d, 6.0), 3.0).translate((0, 0, z_top - 3.0))
+    band = Manifold()
+    for k in range(-int(w), int(w) + 1, 4):
+        band += Manifold.cube((2.0, 2 * d, 6), True).rotate((0, 30, 0)).translate((k * 1.1, 0, z_top - 1.5))
+    return tex, ring ^ band
 
 
 def on_cylinder_back(cs: CrossSection, center: tuple[float, float], radius: float, z: float, depth: float) -> Manifold:
@@ -113,14 +149,14 @@ def rock_pile(rx: float, ry: float, peak: float, seed: int, n: int = 26,
 
 
 def railing(posts: list[tuple[float, float]], runs: list[tuple[tuple[float, float], tuple[float, float]]],
-            z0: float, sink: float = 1.2) -> tuple[Manifold, Manifold]:
+            z0: float, sink: float = 1.2, h: float = 16.0) -> tuple[Manifold, Manifold]:
     """Ограждение (отдельная деталь): стойки уходят на sink мм в отверстия площадки. Возвращает (ограждение, отверстия)."""
     rail, holes = Manifold(), Manifold()
     for x, y in posts:
-        rail += cyl(1.3, 16.0 + sink, x, y, z0 - sink, 32)
+        rail += cyl(1.3, h + sink, x, y, z0 - sink, 32)
         holes += cyl(1.5, sink + 0.01, x, y, z0 - sink, 32)
     for (xa, ya), (xb, yb) in runs:
-        for z in (z0 + 15.0, z0 + 8.0):
+        for z in (z0 + h - 1.0, z0 + h / 2):
             rail += rod_y(1.1, min(ya, yb), max(ya, yb), xa, z) if xa == xb else rod_x(1.1, min(xa, xb), max(xa, xb), ya, z)
     return rail, holes
 
@@ -141,7 +177,7 @@ def ingersoll() -> dict:
     skid = Manifold.extrude(stadium(52, 22, 1.0), 3.0).translate((-12, 0, Z0))
     skid -= cyl(2.9, 2.4, -30, 0, Z0 - 0.01, 32) + cyl(2.9, 2.4, 4, 0, Z0 - 0.01, 32)
     bz0, bz1, fy = Z0 + 3, Z0 + 33, -13.0
-    body = Manifold.extrude(stadium(56, 26, 2.0), 30.0).translate((-12, 0, bz0))
+    body = Manifold.extrude(stadium(54.6, 26, 2.0), 30.0).translate((-11.3, 0, bz0))   # слева 2 мм до ограждения
     for gx in (-24, 6):                                                          # стыки панелей
         body -= box(gx - 0.4, gx + 0.4, fy - 1, fy + 0.6, bz0 + 2, bz1 - 2)
     for k in range(7):                                                           # вентиляционная решётка
@@ -154,7 +190,7 @@ def ingersoll() -> dict:
     by = 13.0
     for gx in (-24, 6):
         body -= box(gx - 0.4, gx + 0.4, by - 0.6, by + 1, bz0 + 2, bz1 - 2)
-    door = box(-37, -27, by - 0.5, by + 1, bz0 + 4, bz1 - 4) - box(-36.2, -27.8, by - 1, by + 2, bz0 + 4.8, bz1 - 4.8)
+    door = box(-36, -27, by - 0.5, by + 1, bz0 + 4, bz1 - 4) - box(-35.2, -27.8, by - 1, by + 2, bz0 + 4.8, bz1 - 4.8)
     body -= door
     body += box(-29.6, -28.6, by - 0.3, by + 1.4, bz0 + 11, bz0 + 19)            # ручка дверцы
     body += box(-30.0, -28.2, by - 0.3, by + 0.7, bz0 + 10.4, bz0 + 11.2) + box(-30.0, -28.2, by - 0.3, by + 0.7, bz0 + 18.8, bz0 + 19.6)
@@ -169,7 +205,7 @@ def ingersoll() -> dict:
     for k in range(7):                                                            # решётка справа
         z = bz0 + 6 + k * 2.6
         body -= box(8.5, 13.5, by - 0.6, by + 1, z, z + 1.0)
-    for x in (-38.5, -25.5, -22.5, 4.5, 7.5, 14.5):                               # заклёпки по углам панелей
+    for x in (-37.0, -25.5, -22.5, 4.5, 7.5, 14.5):                               # заклёпки по углам панелей
         for z in (bz0 + 2.5, bz1 - 2.5):
             body += rod_y(0.6, by - 0.2, by + 0.5, x, z)
     pipes = tube([(-34, -5, bz1 - 1), (-34, -5, Z0 + 40), (-20, -5, Z0 + 40), (-20, -5, bz1 - 1)], 2.4, 4)
@@ -181,18 +217,20 @@ def ingersoll() -> dict:
     btn_r = rod_y(1.4, fy - 0.9, fy + 0.3, -34, Z0 + 14)
     btn_w = rod_y(1.4, fy - 0.9, fy + 0.3, -30, Z0 + 14)
     blue -= label + screen + btn_r + btn_w
+    tex, stripes = platform_details(Z0, [skid, rail_l, rail_r])
     return {
         "title": "Ingersoll Rand iGateway",
         "colors": ["brown", "white", "grey", "yellow", "blue", "black", "red"],
         "objects": [
             # ограждения печатаются первыми, лёжа (2.6 мм высотой), подставка — последней
-            {"name": "Ingersoll Rand — ограждение слева", "plate": 1, "offset": (-50, 40), "print_rot": [(0, 90, 0)],
+            {"name": "Ingersoll Rand — ограждение слева", "plate": 1, "offset": (-50, 40), "print_rot": [(0, 90, 0)], "clearance": 1.0,
              "parts": [("Ограждение", rail_l, "yellow")]},
-            {"name": "Ingersoll Rand — ограждение справа", "plate": 1, "offset": (50, 40), "print_rot": [(0, 90, 0)],
+            {"name": "Ingersoll Rand — ограждение справа", "plate": 1, "offset": (50, 40), "print_rot": [(0, 90, 0)], "clearance": 1.0,
              "parts": [("Ограждение", rail_r, "yellow")]},
-            {"name": "Ingersoll Rand — подставка", "plate": 1, "offset": (0, -97), "parts": [
+            {"name": "Ingersoll Rand — подставка", "plate": 1, "offset": (0, -96), "parts": [
                 ("Подставка", b, "brown"), ("Надпись iGateway", signs, "white"),
-                ("Площадка и бак", plat + pegs + tank - holes_l - holes_r, "grey")]},
+                ("Площадка и бак", plat + pegs + tank + tex - holes_l - holes_r, "grey"),
+                ("Сигнальная полоса", stripes, "yellow")]},
             {"name": "Ingersoll Rand — компрессор", "plate": 2, "parts": [
                 ("Корпус и трубы", blue, "blue"), ("Надпись, экран, кнопка", label + screen + btn_w, "white"),
                 ("Рама", skid, "black"), ("Кнопка", btn_r, "red")]},
@@ -254,29 +292,33 @@ def enerpac() -> dict:
     drill -= nozzle
 
     # домкрат Enerpac (отдельный объект): жёлтый штуцер слева (к нему шланг), трубка справа уходит вниз к площадке
-    jack = cyl(11.0, 3.0, JX, JY, Z0, 96) + cyl(10.0, 30.0, JX, JY, Z0 + 3, 128) + cyl(10.5, 2.0, JX, JY, Z0 + 33, 96)
+    JH = 10.0                                             # домкрат выше, как на фото
+    jack = cyl(11.0, 3.0, JX, JY, Z0, 96) + cyl(10.0, 30.0 + JH, JX, JY, Z0 + 3, 128) + cyl(10.5, 2.0, JX, JY, Z0 + 33 + JH, 96)
     jack += rod_x(2.6, JX - 14.5, JX - 9.0, JY, Z0 + 7) + rod_x(3.1, JX - 13.0, JX - 11.0, JY, Z0 + 7)
-    jack += tube([(JX + 8, JY + 4, Z0 + 29), (JX + 13, 9, Z0 + 29.5), (0, 11, Z0 + 26), (0, 11, Z0 + 8)], 1.9, 6)
+    jack += tube([(JX + 8, JY + 4, Z0 + 29 + JH), (JX + 13, 9, Z0 + 29.5 + JH), (0, 11, Z0 + 26 + JH), (0, 11, Z0 + 8)], 1.9, 6)
     jack += cyl(1.9, 8.01, 0, 11, Z0, 32) + cyl(2.7, 1.2, 0, 11, Z0, 32)
     jack -= cyl(3.7, 2.4, JX, JY, Z0 - 0.01, 48)
-    ram = cyl(7.5, 5.0, JX, JY, Z0 + 35, 96) + cyl(8.2, 3.5, JX, JY, Z0 + 40, 96)
-    ram -= cyl(2.5, 1.0, JX, JY, Z0 + 42.51, 48)
-    txt = wrap_on_cylinder(fit_text("ENERPAC.", 3.0, 22.0), (JX, JY), 10.03, Z0 + 21, EMB)
+    ram = cyl(7.5, 5.0, JX, JY, Z0 + 35 + JH, 96) + cyl(8.2, 3.5, JX, JY, Z0 + 40 + JH, 96)
+    ram -= cyl(2.5, 1.0, JX, JY, Z0 + 42.51 + JH, 48)
+    txt = wrap_on_cylinder(fit_text("ENERPAC.", 3.2, 22.0), (JX, JY), 10.03, Z0 + 26, EMB)
     jack -= txt
-    jack += on_cylinder_back(nameplate(10.0, 6.0), (JX, JY), 9.9, Z0 + 12, 0.7)      # табличка сзади
-    jack += rod_y(2.0, JY + 9.5, JY + 12.0, JX, Z0 + 26) + rod_y(2.6, JY + 11.4, JY + 12.6, JX, Z0 + 26)  # штуцер сзади
+    jack += on_cylinder_back(nameplate(10.0, 6.0), (JX, JY), 9.9, Z0 + 14, 0.7)      # табличка сзади
+    jack += rod_y(2.0, JY + 9.5, JY + 12.0, JX, Z0 + 33) + rod_y(2.6, JY + 11.4, JY + 12.6, JX, Z0 + 33)  # штуцер сзади
 
     # шланг: из штуцера влево, петлёй по площадке вперёд, за кольцом гайковёрта — к чёрному упору под его хвостом
     hose = tube([(JX - 14.5, JY, Z0 + 7), (-34, 4, Z0 + 7), (-40, -4, Z0 + 4), (-35, -14.5, Z0 + 2), (-22, -16.5, Z0 + 2),
                  (-11, -13, Z0 + 2), (-6, -3, Z0 + 2), (6, 1.5, Z0 + 2), (15, 3.5, Z0 + 2), (24, 0.0, Z0 + 2)], 2.1, 6)
     hose = (hose - (plat + wrench + jack + ram)) + wblock
+    tex, stripes = platform_details(Z0, [hose, drill, jack])
+    tex -= wrench
     return {
         "title": "Enerpac Norbar iGateway",
         "colors": ["brown", "white", "grey", "black", "yellow"],
         "objects": [
             {"name": "Enerpac — подставка", "plate": 1, "parts": [
                 ("Подставка", b, "brown"), ("Надпись iGateway", signs, "white"),
-                ("Площадка и гайковёрт", plat + peg + wrench, "grey"), ("Надпись NORBAR", norbar, "black")]},
+                ("Площадка и гайковёрт", plat + peg + wrench + tex, "grey"),
+                ("NORBAR и сигнальная полоса", norbar + stripes, "black")]},
             # мелкие детали печатаются первыми (ниже 25 мм), домкрат — последним
             {"name": "Enerpac — шланг и упор", "plate": 2, "offset": (-75, -75), "parts": [("Шланг и упор", hose, "black")]},
             {"name": "Enerpac — шуруповёрт", "plate": 2, "offset": (-80, 60), "print_rot": [(90, 0, 0)], "parts": [
@@ -322,10 +364,11 @@ def tire_local(R: float = 23.0, r_in: float = 9.0, w: float = 24.0) -> Manifold:
 def tire() -> dict:
     W, D = 92.0, 46.0
     b, signs = base(W, D, back="MINING TIRE")
-    t_local = tire_local()
+    K = 1.25                                              # шина крупнее, как на фото
+    t_local = tire_local().scale((K, K, K))
     # в сборе: стоит на ребре, ось смотрит вперёд-влево
-    placed = t_local.translate((0, 0, -12)).rotate((90, 0, 0)).rotate((0, 0, -25)).translate((0, 3, BASE_H + 23 - 2.5))
-    clip = Manifold.extrude(stadium(W - 2, D - 2, 13), 20).translate((0, 0, BASE_H - 0.01))
+    placed = t_local.translate((0, 0, -12 * K)).rotate((90, 0, 0)).rotate((0, 0, -15)).translate((0, 1, BASE_H + 23 * K - 3.0))
+    clip = top_clip(W, D)
     st = rocks(rock_pile(40, 19, 7.0, 7, size=(11, 15)), clip, 7)
     st -= placed
     b -= placed
@@ -333,10 +376,10 @@ def tire() -> dict:
         "title": "Tire iGateway",
         "colors": ["brown", "white", "grey", "black"],
         "objects": [
-            # обе детали ниже 25 мм — печатаются по очереди на одной пластине, шина лёжа на боку
+            # печатаются по очереди: сначала подставка (ниже 25 мм), потом шина лёжа на боку
             {"name": "Шина — подставка", "plate": 1, "offset": (0, -75), "parts": [
                 ("Подставка", b, "brown"), ("Надпись iGateway", signs, "white"), ("Камни", st, "grey")]},
-            {"name": "Шина", "plate": 1, "offset": (0, 70), "print_rot": [(0, 0, 25), (-90, 0, 0)],
+            {"name": "Шина", "plate": 1, "offset": (0, 70), "print_rot": [(0, 0, 15), (-90, 0, 0)],
              "parts": [("Шина", placed, "black")]},
         ],
         "plate_names": {"1": "Подставка и шина"},
@@ -351,8 +394,13 @@ def epiroc() -> dict:
     zb = BASE_H
     chisel = cyl(3.2, 14.0, 0, 0, zb, 64)
     chisel += cyl(4.4, 2.0, 0, 0, zb + 14, 64) + cyl(2.4, 3.0, 0, 0, zb + 16, 48)
-    clip = Manifold.extrude(stadium(W - 2, D - 2, 13), 20).translate((0, 0, zb - 0.01))
-    st = rocks(rock_pile(38, 18, 8.0, 11, size=(10, 14)) + [(0, 0, 14, 8.5)], clip, 11)
+    clip = top_clip(W, D)
+    st = rocks(rock_pile(38, 18, 8.0, 11, size=(10, 14)) + [(0, 0, 15, 9.5)], clip, 11)
+    KE = 1.3                                              # молот и пика крупнее, как на фото
+
+    def big(m: Manifold) -> Manifold:
+        return m.translate((0, 0, -zb)).scale((KE, KE, KE)).translate((0, 0, zb))
+    chisel = big(chisel)
     st -= chisel
 
     # молот (отдельный объект), низ = верх уступа зубила
@@ -383,6 +431,7 @@ def epiroc() -> dict:
     hoses -= body + collar
     txt = on_front_face(fit_text("Epiroc", 3.6, 15.0), -9.0, z1 + 15, EMB)
     body -= txt
+    collar, body, head, hoses, txt = (big(m) for m in (collar, body, head, hoses, txt))
     return {
         "title": "Epiroc iGateway",
         "colors": ["brown", "white", "grey", "black", "yellow"],
@@ -392,7 +441,7 @@ def epiroc() -> dict:
                 ("Пика", chisel, "black")]},
             # шланги и молот на одной пластине, но печатаются по очереди («по объектам»):
             # сначала шланги (ниже 25 мм — проходят под балкой A1), потом молот — без смены цвета на каждом слое
-            {"name": "Epiroc — шланги", "plate": 2, "offset": (-55, 0), "parts": [("Шланги", hoses, "black")]},
+            {"name": "Epiroc — шланги", "plate": 2, "offset": (-55, 0), "print_rot": [(90, 0, 0)], "parts": [("Шланги", hoses, "black")]},
             {"name": "Epiroc — молот", "plate": 2, "offset": (55, 0), "parts": [
                 ("Корпус", body, "yellow"), ("Оголовок, держатель, надпись", head + collar + txt, "black")]},
         ],
@@ -405,23 +454,37 @@ def epiroc() -> dict:
 def sulzer() -> dict:
     import sulzer_pump as S
     p = S.build()
-    back = back_sign("SULZER", 100, 52)
-    p["1_подставка_коричневый"] = p["1_подставка_коричневый"] - back
-    p["1_надпись_белый"] = p["1_надпись_белый"] + back
-    rail, holes = railing([(sx * 40, y) for sx in (-1, 1) for y in (-15, 0, 15)] + [(-20, 15), (0, 15), (20, 15)],
-                          [((-40, -15), (-40, 15)), ((40, -15), (40, 15)), ((-40, 15), (40, 15))], S.Z0)
+    Z0, px, K = S.Z0, S.PUMP[0], 1.3                     # насос, шланг и труба крупнее, как на фото
+
+    def big(m: Manifold, cx: float, dx: float = 0.0) -> Manifold:
+        return m.translate((-cx, 0, -Z0)).scale((K, K, K)).translate((cx + dx, 0, Z0))
+    b, signs = base(100, 52, back="SULZER")
+    plat = platform()
+    pump = big(p["2_насос_красный"], px)
+    label = big(p["2_надпись_SULZER_белый"], px)
+    hose = big(p["2_шланг_чёрный"], px)
+    peg = big(cyl(3.4, 2.0, px, 0, Z0, 48), px)
+    # труба: крупнее и сдвинута внутрь площадки, чтобы не заходить в ограждение; торец подрезан по насосу
+    pipe = p["1_площадка_и_труба_серый"] - plat - cyl(3.45, 2.1, px, 0, Z0 - 0.05, 48)
+    pipe = big(pipe, S.PIPE_X, dx=3.5) - pump - label
+    # ограждение выше (21 мм) и шире — вокруг крупного насоса
+    RX, RY = 40.5, 17.5
+    rail, holes = railing([(sx * RX, y) for sx in (-1, 1) for y in (-RY, 0, RY)] + [(-20, RY), (0, RY), (20, RY)],
+                          [((-RX, -RY), (-RX, RY)), ((RX, -RY), (RX, RY)), ((-RX, RY), (RX, RY))], Z0, h=21.0)
+    tex, stripes = platform_details(Z0, [pump, hose, rail])
     return {
         "title": "Sulzer iGateway",
         "colors": ["brown", "white", "grey", "yellow", "red", "black"],
         "objects": [
-            {"name": "Sulzer — ограждение", "plate": 1, "offset": (0, 22), "parts": [("Ограждение", rail, "yellow")]},
-            {"name": "Sulzer — подставка", "plate": 1, "offset": (0, -97), "parts": [
-                ("Подставка", p["1_подставка_коричневый"], "brown"), ("Надпись iGateway", p["1_надпись_белый"], "white"),
-                ("Площадка и труба", p["1_площадка_и_труба_серый"] - holes, "grey")]},
+            {"name": "Sulzer — ограждение", "plate": 1, "offset": (0, 26), "clearance": 1.0,
+             "parts": [("Ограждение", rail, "yellow")]},
+            {"name": "Sulzer — подставка", "plate": 1, "offset": (0, -96), "parts": [
+                ("Подставка", b, "brown"), ("Надпись iGateway", signs, "white"),
+                ("Площадка и труба", plat + peg + pipe + tex - holes, "grey"), ("Сигнальная полоса", stripes, "yellow")]},
             {"name": "Sulzer — шланг", "plate": 2, "offset": (-55, 0), "print_rot": [(90, 0, 0)],
-             "parts": [("Шланг", p["2_шланг_чёрный"], "black")]},
+             "parts": [("Шланг", hose, "black")]},
             {"name": "Sulzer — насос", "plate": 2, "offset": (55, 0), "parts": [
-                ("Насос", p["2_насос_красный"], "red"), ("Надпись SULZER", p["2_надпись_SULZER_белый"], "white")]},
+                ("Насос", pump, "red"), ("Надпись SULZER", label, "white")]},
         ],
         "plate_names": {"1": "Подставка и ограждение", "2": "Насос и шланг"},
         "note": "ограждение — стойками в отверстия площадки; насос — гнездом на штырь; шланг — к насосу и площадке",
@@ -451,6 +514,15 @@ def check_assembly(name: str, fig: dict) -> list[str]:
         touch = max((a.translate(tuple(0.25 * np.array(d))) ^ others).volume() for d in dirs)
         assert touch > 0.01, f"{name}: «{na}» ни на что не опирается в сборе"
         msgs.append(f"{na}: контакт {touch:.1f} мм³")
+        gap = fig["objects"][i].get("clearance")
+        if gap:   # ограждение: вокруг (выше площадки) не ближе gap мм ни к одной детали
+            z_lo = a.bounding_box()[2] + 1.5
+            upper = a ^ box(-500, 500, -500, 500, z_lo, 500)
+            for ang in range(0, 360, 30):
+                dv = (gap * math.cos(math.radians(ang)), gap * math.sin(math.radians(ang)), 0)
+                ov = (upper.translate(dv) ^ others).volume()
+                assert ov < 0.01, f"{name}: «{na}» ближе {gap} мм к другой детали (направление {ang}°, {ov:.2f} мм³)"
+            msgs.append(f"{na}: зазор ≥ {gap} мм со всех сторон")
     return msgs
 
 

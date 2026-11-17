@@ -264,8 +264,8 @@ def build() -> dict[str, Manifold]:
         plate -= CrossSection.square((6.6, 0.45), True).translate((0, 1.5 + 1.2 * k))
     plate_m = wrap_on_cylinder(plate, (px, py), 9.9, Z0 + 23.0, 0.7)
     pump += plate_m.translate((-px, -py, 0)).rotate((0, 0, 180)).translate((px, py, 0))
-    pump += Manifold.cube((6.0, 3.0, 5.0)).translate((px - 3.0, py + 9.5, Z0 + 13.0))      # кронштейн
-    pump -= Manifold.cube((2.0, 2.0, 5.2)).translate((px - 1.0, py + 10.6, Z0 + 12.9))     # паз направляющей
+    pump += Manifold.cube((6.0, 2.0, 5.0)).translate((px - 3.0, py + 9.5, Z0 + 13.0))      # кронштейн
+    pump -= Manifold.cube((2.0, 1.2, 5.2)).translate((px - 1.0, py + 10.4, Z0 + 12.9))     # паз направляющей
     pump += cyl(1.6, 2.2, px, py + 4.2, Z0 + 40.4, 32) + cyl(2.1, 0.9, px, py + 4.2, Z0 + 40.4, 32)   # кабельный ввод
     parts["2_насос_красный"] = pump - label
     # шланг (чёрный), как на фото: из муфты плавной дугой вверх-вправо и свободно вниз к площадке; внизу хомут
