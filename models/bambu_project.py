@@ -107,7 +107,8 @@ def finalize(exported: Path, dst: Path, spec: dict[str, Any]) -> None:
         x, y = plate_center(o["plate"] - 1, n_plates, bed)
         x += o.get("offset", (0, 0))[0]
         y += o.get("offset", (0, 0))[1]
-        mm = re.sub(rf'(<item objectid="{o["_oid"]}"[^>]*transform="1 0 0 0 1 0 0 0 1 )[^"]*"', rf'\g<1>{x:g} {y:g} 0"', mm)
+        # меняем только X и Y; Z оставляем как сохранил Bambu Studio (у объекта из одной части там половина высоты)
+        mm = re.sub(rf'(<item objectid="{o["_oid"]}"[^>]*transform="1 0 0 0 1 0 0 0 1 )\S+ \S+ (\S+)"', rf'\g<1>{x:g} {y:g} \g<2>"', mm)
     files["3D/3dmodel.model"] = mm.encode()
 
     ps = json.loads(files["Metadata/project_settings.config"])
@@ -138,12 +139,21 @@ def slice_report(cli: list[str], project: Path, workdir: Path) -> list[dict[str,
     res = json.loads((out / "result.json").read_text()) if (out / "result.json").exists() else {}
     if r.returncode != 0 or not (out / "sliced.gcode.3mf").exists():
         raise RuntimeError(f"Bambu Studio не нарезал проект: {res.get('error_string') or r.stdout[-800:]}")
-    s = zipfile.ZipFile(out / "sliced.gcode.3mf").read("Metadata/slice_info.config").decode()
+    zf = zipfile.ZipFile(out / "sliced.gcode.3mf")
+    s = zf.read("Metadata/slice_info.config").decode()
+    max_z = {}
+    for n in zf.namelist():
+        mt = re.fullmatch(r"Metadata/plate_(\d+)\.gcode", n)
+        if mt:
+            head = zf.open(n).read(4000).decode(errors="ignore")
+            mz = re.search(r"; max_z_height: ([\d.]+)", head)
+            max_z[int(mt.group(1))] = float(mz.group(1)) if mz else None
     plates = []
     for p in re.findall(r"<plate>.*?</plate>", s, re.S):
         g = lambda k: (re.search(rf'key="{k}" value="([^"]*)"', p) or [None, None])[1]  # noqa: E731
         fil = [dict(re.findall(r'(\w+)="([^"]*)"', f)) for f in re.findall(r"<filament [^>]*/>", p)]
         plates.append({"plate": int(g("index")), "time_s": int(g("prediction")), "weight_g": float(g("weight")),
+                       "max_z": max_z.get(int(g("index"))),
                        "filaments": [(f["id"], f["color"], float(f["used_g"])) for f in fil]})
     return plates
 
@@ -159,7 +169,13 @@ def build(generic_3mf: Path, dst: Path, spec: dict[str, Any], cli: list[str], pr
         if r.returncode != 0 or not (tdp / "exported.3mf").exists():
             raise RuntimeError("Bambu Studio не смог сохранить проект:\n" + r.stdout[-1500:])
         finalize(tdp / "exported.3mf", dst, spec)
-        return slice_report(cli, dst, tdp)
+        rep = slice_report(cli, dst, tdp)
+        # контроль: высота нарезки каждой пластины = высоте самой высокой детали на ней (ничего не ушло под стол)
+        for p in rep:
+            hs = [o["height"] for o in spec["objects"] if o["plate"] == p["plate"] and "height" in o]
+            if hs and p["max_z"] is not None:
+                assert abs(p["max_z"] - max(hs)) < 0.35, f"пластина {p['plate']}: нарезано до {p['max_z']} мм, а деталь {max(hs):.1f} мм"
+        return rep
 
 
 if __name__ == "__main__":

@@ -432,7 +432,7 @@ def make(name: str, out: Path) -> tuple[Path, dict]:
         for _, t in meshes:                          # центр объекта — в начале координат, позицию задаёт offset
             t.apply_translation((-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2, 0))
         assemblies.append((o["name"], meshes, (100.0 + 60 * i, 128.0)))
-        spec_objects.append({"name": o["name"], "plate": o["plate"], "offset": o.get("offset", (0, 0)),
+        spec_objects.append({"name": o["name"], "plate": o["plate"], "offset": o.get("offset", (0, 0)), "height": float(hi[2] - lo[2]),
                              "parts": [{"name": pn, "filament": colors.index(col) + 1} for (pn, _), (_, _, col) in zip(meshes, o["parts"])]})
         print(f"  {o['name']}: {np.round(hi - lo, 1)} мм, частей {len(meshes)}")
     out.mkdir(parents=True, exist_ok=True)
@@ -457,9 +457,58 @@ def main() -> None:
             rep = build(generic, out / f"{name}_A1.3mf", spec, cli.split(), "Bambu Lab A1 0.4 nozzle",
                         "0.16mm Optimal @BBL A1", "Bambu PLA Basic @BBL A1")
             for p in rep:
-                print(f"  пластина {p['plate']}: {p['time_s'] // 3600} ч {p['time_s'] % 3600 // 60} мин, {p['weight_g']} г —",
+                print(f"  пластина {p['plate']}: {p['time_s'] // 3600} ч {p['time_s'] % 3600 // 60} мин, {p['weight_g']} г, высота {p['max_z']} мм —",
                       ", ".join(f"#{i} {c} {g} г" for i, c, g in p["filaments"]))
 
 
+
+
+# ---------------------------------------------------------------- одноцветная версия: каждая фигурка — одна цельная деталь
+def solid(fig: dict) -> Manifold:
+    """Все части фигурки в положении сборки, слитые в одно тело; внутренние пустоты (зазоры штырь—гнездо) заполнены."""
+    m = sum((p[1] for o in fig["objects"] for p in o["parts"]), Manifold())
+    comps = m.decompose()
+    outer = [c for c in comps if c.volume() > 0]
+    return sum(outer, Manifold())
+
+
+def make_mono(names: list[str], out: Path, color: str = "grey") -> tuple[Path, dict]:
+    assemblies, spec_objects = [], []
+    for i, name in enumerate(names):
+        fig = FIGURINES[name]()
+        body = solid(fig)
+        n = len([c for c in body.decompose() if c.volume() > 0])
+        t = to_mesh(body)
+        assert t.is_watertight, f"{name}: не замкнута"
+        lo, hi = t.bounds
+        t.apply_translation((-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2, -lo[2]))
+        title = fig["title"].replace(" iGateway", "")
+        print(f"  {title}: {np.round(hi - lo, 1)} мм, {t.volume / 1000:.1f} см³, тел: {n}")
+        assemblies.append((title, [(title, t)], (128.0, 128.0)))
+        spec_objects.append({"name": title, "plate": i + 1, "height": float(hi[2] - lo[2]),
+                             "parts": [{"name": title, "filament": 1}]})
+    out.mkdir(parents=True, exist_ok=True)
+    generic = out / "iGateway_mono_parts.3mf"
+    write_3mf(generic, assemblies, "iGateway")
+    spec = {"bed": [256, 256], "bed_type": "Textured PEI Plate", "supports": "tree(auto)", "colors": [HEX[color]],
+            "plate_names": {str(i + 1): FIGURINES[n]()["title"].replace(" iGateway", "") for i, n in enumerate(names)},
+            "objects": spec_objects}
+    return generic, spec
+
+
+def main_mono() -> None:
+    out = Path(sys.argv[2] if len(sys.argv) > 2 else "dist/figurines")
+    names = list(FIGURINES)
+    generic, spec = make_mono(names, out / "work")
+    cli = os.environ.get("BAMBU_CLI")
+    if cli:
+        from bambu_project import build
+        rep = build(generic, out / "iGateway_all_grey_A1.3mf", spec, cli.split(), "Bambu Lab A1 0.4 nozzle",
+                    "0.16mm Optimal @BBL A1", "Bambu PLA Basic @BBL A1")
+        for p in rep:
+            print(f"  пластина {p['plate']}: {p['time_s'] // 3600} ч {p['time_s'] % 3600 // 60} мин, {p['weight_g']} г, высота {p['max_z']} мм")
+
+
 if __name__ == "__main__":
-    main()
+    # python models/igateway_figurines.py --mono [папка]  — все фигурки цельными, одним серым пластиком, в одном проекте
+    main_mono() if "--mono" in sys.argv else main()
