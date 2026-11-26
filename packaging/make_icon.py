@@ -1,50 +1,57 @@
-"""Значок SEBE 3D (printhub.ico) в айдентике интерфейса: тёмная плашка как шапка программы,
-«SEBE» белым, «3D» фирменным синим #2F6FED. На мелких размерах (16–24 px) — только крупное «3D».
-
-Готовый значок лежит в packaging/sebe3d.ico — сборка берёт его (на сборочном сервере нет шрифта Inter).
+"""Значок SEBE 3D (printhub.ico) в айдентике SEBE: белая плашка со знаком «S» —
+лента с шариками на концах, переход от бирюзового к зелёному (см. sebe_mark.py).
+Готовый значок лежит в packaging/sebe3d.ico — сборка берёт его.
 Перерисовать: python packaging/make_icon.py packaging/sebe3d.ico
+Ещё пишет SVG знака для интерфейса: python packaging/make_icon.py --svg printhub/web/logo-s.svg
 """
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-ACCENT = (47, 111, 237, 255)
-DARK = (20, 25, 34, 255)
-WHITE = (255, 255, 255, 255)
-FONT_DIRS = ["/usr/share/fonts/opentype/inter", "C:/Windows/Fonts"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sebe_mark import BALL, WIDTH, _centerline  # noqa: E402
+from sebe_mark import draw_mark  # noqa: E402
 
-
-def font(names: list[str], px: int) -> ImageFont.FreeTypeFont:
-    for d in FONT_DIRS:
-        for n in names:
-            p = Path(d) / n
-            if p.exists():
-                return ImageFont.truetype(str(p), px)
-    return ImageFont.truetype("DejaVuSans-Bold.ttf", px)
-
-
-def _center(d: ImageDraw.ImageDraw, cx: float, y: float, txt: str, f: ImageFont.FreeTypeFont, fill) -> None:
-    l, t, r, _ = d.textbbox((0, 0), txt, font=f)
-    d.text((cx - (l + r) / 2, y - t), txt, font=f, fill=fill)
+TILE = (255, 255, 255, 255)
 
 
 def draw(size: int) -> Image.Image:
-    k = 4                                    # рисуем крупнее и уменьшаем — ровные края
+    k = 4
     S = size * k
     s = S / 256
     im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    d.rounded_rectangle((8 * s, 8 * s, 248 * s, 248 * s), radius=56 * s, fill=DARK)
-    if size <= 24:                           # мелко: только «3D», крупно
-        _center(d, 128 * s, 62 * s, "3D", font(["Inter-Black.otf", "seguibl.ttf", "arialbd.ttf"], int(150 * s)), ACCENT)
-    else:
-        _center(d, 128 * s, 46 * s, "SEBE", font(["Inter-ExtraBold.otf", "seguibl.ttf", "arialbd.ttf"], int(50 * s)), WHITE)
-        _center(d, 128 * s, 108 * s, "3D", font(["Inter-Black.otf", "seguibl.ttf", "arialbd.ttf"], int(118 * s)), ACCENT)
+    d.rounded_rectangle((8 * s, 8 * s, 248 * s, 248 * s), radius=56 * s, fill=TILE)
+    mk = 0.86 if size <= 24 else 0.78           # на мелких размерах знак крупнее
+    m = draw_mark(int(256 * mk * s))
+    off = int((S - m.size[0]) / 2)
+    im.paste(m, (off, off + int(2 * s)), m)
     return im.resize((size, size), Image.LANCZOS)
 
 
+def svg_mark() -> str:
+    """Знак S в SVG: лента (средняя линия + круглые концы), шарики, градиент сверху вниз бирюзовый → зелёный."""
+    pts = _centerline(160) * 100
+    d = "M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in pts[30:-30])
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    neck1 = "M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in pts[:32])
+    neck2 = "M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in pts[-32:])
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            '<defs><linearGradient id="g" x1="0" y1="10" x2="0" y2="90" gradientUnits="userSpaceOnUse">'
+            '<stop offset="0" stop-color="#22CBD3"/><stop offset=".42" stop-color="#00A9C2"/>'
+            '<stop offset=".62" stop-color="#7AD94C"/><stop offset="1" stop-color="#2FAE4C"/></linearGradient></defs>'
+            f'<g fill="none" stroke="url(#g)" stroke-linecap="round" stroke-linejoin="round">'
+            f'<path d="{d}" stroke-width="{WIDTH * 100:.1f}"/>'
+            f'<path d="{neck1}" stroke-width="7.5"/><path d="{neck2}" stroke-width="7.5"/></g>'
+            f'<circle cx="{x0:.1f}" cy="{y0:.1f}" r="{BALL * 100:.1f}" fill="#2ACFD2"/>'
+            f'<circle cx="{x1:.1f}" cy="{y1:.1f}" r="{BALL * 100:.1f}" fill="#3CC85A"/></svg>')
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "--svg":
+        Path(sys.argv[2]).write_text(svg_mark(), encoding="utf-8")
+        raise SystemExit(0)
     out = sys.argv[1] if len(sys.argv) > 1 else "printhub.ico"
     sizes = [16, 24, 32, 48, 64, 128, 256]
     imgs = [draw(n) for n in sizes]
