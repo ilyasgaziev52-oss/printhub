@@ -555,7 +555,8 @@ async function renderLibrary() {
           <td class="num">${fmtSize(it.size)}</td><td class="small">${fmtDate(it.uploaded_at)}</td>
           <td style="white-space:nowrap">
             ${it.kind !== 'mesh' && it.kind !== 'other' ? `<button class="btn small primary" data-send="${it.id}">▶ На печать</button>` : ''}
-            ${it.kind === 'mesh' ? `<button class="btn small primary" data-prep="${it.id}">🛠 Подготовка</button>` : ''}
+            ${it.kind === 'mesh' ? `<button class="btn small primary" data-prep="${it.id}">🛠 Подготовка</button>
+              ${/_(opalubka|forma)\.3mf$/i.test(it.filename) ? '' : `<button class="btn small" data-mold="${it.id}" title="Опалубка под силикон или разъёмная форма для литья">🧱 Опалубка</button>`}` : ''}
             <button class="btn small" data-info="${it.id}" title="Подробности">ℹ</button>
             <button class="btn small" data-cost="${it.id}" title="Стоимость">₽</button>
             <a class="btn small" href="/api/library/${it.id}/download" title="Скачать">⬇</a>
@@ -571,6 +572,7 @@ async function renderLibrary() {
   $$('[data-send]').forEach((b) => { b.onclick = () => sendDialog(b.dataset.send); });
   $$('[data-prep]').forEach((b) => { b.onclick = () => { S.prepare.id = b.dataset.prep; localStorageSet('prepare_id', S.prepare.id); setTab('prepare'); }; });
   $$('[data-info]').forEach((b) => { b.onclick = () => itemInfo(b.dataset.info); });
+  $$('[data-mold]').forEach((b) => { b.onclick = () => moldDialog(b.dataset.mold); });
   $$('[data-cost]').forEach((b) => { b.onclick = () => { S.calcItem = b.dataset.cost; setTab('calc'); }; });
   $$('[data-del]').forEach((b) => {
     b.onclick = async () => { if (confirmBox('Удалить файл из библиотеки?')) { await guard(() => api(`/library/${b.dataset.del}`, { method: 'DELETE' })); renderLibrary(); } };
@@ -595,6 +597,75 @@ function uploadFiles(files) {
     xhr.onerror = () => { row.textContent = `✗ ${file.name}: ошибка сети`; resolve(); };
     xhr.send(fd);
   }))).then(() => { if (S.tab === 'library') renderLibrary(); });
+}
+
+// ------------------------------------------------------------------ опалубка / форма для литья
+async function moldDialog(id) {
+  const it = await api(`/library/${id}`);
+  const mats = await api('/mold/materials');
+  const m = modal(`Опалубка — ${it.filename}`, `
+    <div class="row" style="gap:8px;margin-bottom:12px">
+      <label class="row"><input type="radio" name="mk" value="silicone_box" checked> <b>Опалубка под силикон</b></label>
+      <label class="row"><input type="radio" name="mk" value="two_part"> <b>Разъёмная форма для литья</b></label>
+    </div>
+    <p class="small muted" id="mk-help"></p>
+    <div class="form" data-k="silicone_box">
+      <label class="field">Зазор до модели (толщина силикона), мм<input name="gap" type="number" value="8" step="0.5" min="3"></label>
+      <label class="field">Силикон над моделью, мм<input name="over" type="number" value="8" step="0.5" min="3"></label>
+      <label class="field">Толщина стенок опалубки, мм<input name="wall" type="number" value="2.4" step="0.2" min="1.2"></label>
+      <label class="row small"><input type="checkbox" name="bolts" checked> проушины под болты M3</label>
+    </div>
+    <div class="form hidden" data-k="two_part">
+      <label class="field">Что заливать<select name="material">${mats.filter((x) => x.id !== 'silicone').map((x) => `<option value="${x.id}">${esc(x.name)} — ${x.density} г/см³</option>`).join('')}</select></label>
+      <label class="field">Толщина формы, мм<input name="wall2" type="number" value="10" step="1" min="6"></label>
+      <label class="field">Высота разъёма от низа модели, мм (пусто — авто по самому широкому месту)<input name="split" type="number" step="0.5" placeholder="авто"></label>
+      <label class="field">Диаметр литника, мм<input name="sprue_d" type="number" value="6" step="0.5" min="3"></label>
+      <label class="row small"><input type="checkbox" name="vents" checked> воздушники</label>
+      <label class="row small"><input type="checkbox" name="keys" checked> замки-полусферы</label>
+      <label class="row small"><input type="checkbox" name="bolts2" checked> отверстия под болты</label>
+    </div>
+    <div id="mold-res" style="margin-top:12px"></div>
+    <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" id="mold-go">Создать</button></div>`);
+  const f = m.el;
+  const HELP = {
+    silicone_box: 'Короб вокруг мастер-модели: дно с отметкой, куда ставить модель, и две половины стенок. Заливаете силикон — получаете силиконовую форму.',
+    two_part: 'Готовая форма из двух половин: литник с воронкой, воздушники, замки, пазы для разъёма. Сразу лейте гипс, бетон, смолу или воск.',
+  };
+  const kind = () => f.querySelector('[name=mk]:checked').value;
+  const upd = () => {
+    f.querySelectorAll('[data-k]').forEach((el) => el.classList.toggle('hidden', el.dataset.k !== kind()));
+    $('#mk-help', f).textContent = HELP[kind()];
+  };
+  f.querySelectorAll('[name=mk]').forEach((r) => { r.onchange = upd; });
+  upd();
+  const g = (n) => f.querySelector(`[name="${n}"]`);
+  $('#mold-go', f).onclick = async () => {
+    const k = kind();
+    const options = k === 'silicone_box'
+      ? { gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, bolts: g('bolts').checked }
+      : { material: g('material').value, wall: +g('wall2').value, split: g('split').value === '' ? 'auto' : +g('split').value,
+          sprue_d: +g('sprue_d').value, vents: g('vents').checked, keys: g('keys').checked, bolts: g('bolts2').checked };
+    const btn = $('#mold-go', f); btn.disabled = true; btn.textContent = 'Строю…';
+    const r = await guard(() => api(`/library/${id}/mold`, { method: 'POST', json: { kind: k, options } }));
+    btn.disabled = false; btn.textContent = 'Создать заново';
+    if (!r) return;
+    const i = r.info;
+    const amount = k === 'silicone_box'
+      ? `<li>Силикона: <b>${fmtNum(i.silicone_g, 0)} г</b> (${fmtNum(i.silicone_cm3, 0)} см³), с запасом 10% — <b>${fmtNum(i.silicone_g_with_reserve, 0)} г</b></li>
+         <li>Уровень заливки: ${fmtNum(i.fill_height_mm, 0)} мм от дна, внутренний размер ${i.inner_mm.join(' × ')} мм</li>`
+      : `<li>Разъём на высоте <b>${fmtNum(i.split_mm, 1)} мм</b>${i.split_auto ? ' (по самому широкому месту)' : ''}</li>
+         <li>Материала на отливку: <b>${fmtNum(i.cast_g, 0)} г</b> (${fmtNum(i.cast_cm3, 1)} см³), с запасом — ${fmtNum(i.cast_g_with_reserve, 0)} г</li>
+         <li>Размер формы: ${i.mold_mm.join(' × ')} мм, воздушников: ${i.vents}</li>`;
+    $('#mold-res', f).innerHTML = `<div class="panel">
+      <p>✅ Готово: <b>${esc(r.filename)}</b> — добавлен в «Модели», детали уже разложены на столе.</p>
+      ${r.warnings.map((w) => `<div class="msg" style="color:var(--warn)">⚠ ${esc(w)}</div>`).join('')}
+      <ul class="small">${amount}${i.bolts ? `<li>Крепёж: ${esc(i.bolts)}</li>` : ''}
+        <li>Детали: ${r.parts.map((p) => `${esc(p.name)} (${p.size_mm.join('×')} мм)`).join(', ')}</li></ul>
+      <details class="small"><summary>Как пользоваться</summary><ol>${i.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol></details>
+      <div class="row" style="margin-top:10px"><a class="btn small" href="/api/library/${r.item_id}/download">⬇ Скачать 3MF</a>
+        <button class="btn small primary" id="mold-prep">✨ Подготовить к печати</button></div></div>`;
+    $('#mold-prep', f).onclick = () => { m.close(); S.prepare.id = r.item_id; localStorageSet('prepare_id', r.item_id); setTab('models', 'prepare'); };
+  };
 }
 
 async function itemInfo(id) {
@@ -833,7 +904,11 @@ async function renderPrepare() {
     };
   });
   $('#prep-adv').ontoggle = (e) => localStorageSet('prep_adv_open', e.target.open ? '1' : '0');
-  $('#auto-prep').onclick = () => autoPrepare(S.prepare.id, po);
+  // опалубки и формы уже разложены на столе по деталям — не поворачивать и не сливать их
+  const cur = items.find((i) => i.id === S.prepare.id);
+  const isMold = cur && /_(opalubka|forma)\.3mf$/i.test(cur.filename);
+  $('#auto-prep').onclick = () => autoPrepare(S.prepare.id, isMold
+    ? { ...po, orient: 'none', merge_bodies: false, fit_rotate: false, scale_to_fit: false } : po);
   $('#prep-item').onchange = (e) => { S.prepare.id = e.target.value; localStorageSet('prepare_id', S.prepare.id); renderPrepare(); };
   $('#prep-printer').onchange = (e) => { S.prepare.printer = e.target.value; localStorageSet('prepare_printer', S.prepare.printer); renderPrepare(); };
   const bed = pr && pr.config.build_volume && pr.config.build_volume[0] ? pr.config.build_volume : [256, 256, 256];

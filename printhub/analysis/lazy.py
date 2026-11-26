@@ -19,3 +19,4 @@ class LazyModule:
 
 
 mesh = LazyModule("printhub.analysis.mesh")
+mold = LazyModule("printhub.analysis.mold")

@@ -30,6 +30,7 @@ class NoCacheStatic(StaticFiles):
 
 from . import __version__
 from .analysis.lazy import mesh as meshmod
+from .analysis.lazy import mold as moldmod
 from .analysis.cost import calc_cost
 from .db import Database
 from .discovery import default_subnet, discover_all
@@ -577,6 +578,42 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         db.add_library_item(new)
         await mgr.broadcast({"type": "library_changed"})
         return {"item_id": new["id"], "summary": summarize_analysis(analysis), "log": log_text[-4000:]}
+
+    @app.get("/api/mold/materials")
+    async def mold_materials() -> list[dict[str, Any]]:
+        return [{"id": k, "name": v[0], "density": v[1]} for k, v in moldmod.CAST_MATERIALS.items()]
+
+    @app.post("/api/library/{lid}/mold")
+    async def make_mold(lid: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """Опалубка под силикон или разъёмная форма по 3D-модели — новым файлом в библиотеке."""
+        it, m = await asyncio.to_thread(load_item_mesh, lid)
+        kind = body.get("kind") or "silicone_box"
+        repaired: list[str] = []
+        if not m.is_watertight:                       # дырявую модель сначала чиним сами
+            m, rr = await asyncio.to_thread(meshmod.repair_mesh, m)
+            if not m.is_watertight:
+                m, rr = await asyncio.to_thread(meshmod.repair_mesh, m, aggressive=True)
+            repaired = list(rr.steps)
+        try:
+            res = await asyncio.to_thread(moldmod.make_mold, m, kind, body.get("options") or {})
+            data_ = await asyncio.to_thread(moldmod.to_3mf, res.parts, Path(it["filename"]).stem)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except Exception as e:  # noqa: BLE001
+            raise err(e) from e
+        suffix = "_opalubka" if kind == "silicone_box" else "_forma"
+        fd, tmp = tempfile.mkstemp(dir=data)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data_)
+        new = store_upload(tmp, f"{Path(it['filename']).stem}{suffix}.3mf", mgr.library_dir)
+        analysis, thumb = await asyncio.to_thread(analyze_path, new["stored_path"], new["filename"])
+        new.update(kind=analysis.get("kind", "mesh"), technology="fdm", analysis=analysis, thumbnail=thumb)
+        db.add_library_item(new)
+        await mgr.broadcast({"type": "library_changed"})
+        out = {"item_id": new["id"], "filename": new["filename"], **res.to_dict()}
+        if repaired:
+            out["warnings"] = [f"Модель сначала исправлена: {'; '.join(repaired)[:300]}"] + out["warnings"]
+        return out
 
     @app.post("/api/library/{lid}/prepare")
     async def prepare_item(lid: str, body: dict[str, Any] = Body(default={})) -> dict[str, Any]:
