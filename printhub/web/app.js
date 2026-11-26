@@ -184,21 +184,54 @@ function setTab(tab, sub) {
 function view(id) { return $('#' + id) || document.createElement('div'); }
 
 function renderModels() {
-  const back = S.sub === 'list' ? '' : '<button class="btn small" id="m-back">← Все модели</button>';
-  $('#main').innerHTML = `<div class="row" style="margin-bottom:8px">${back}<span class="spacer"></span>
-    ${S.sub !== 'calc' ? '<button class="btn small" id="m-calc">₸ Калькулятор</button>' : ''}</div><div id="models-body"></div>`;
-  if ($('#m-back')) $('#m-back').onclick = () => setTab('models', 'list');
-  if ($('#m-calc')) $('#m-calc').onclick = () => setTab('models', 'calc');
+  $('#main').innerHTML = '<div id="models-body"></div>';
   ({ list: renderLibrary, prepare: renderPrepare, calc: renderCalc })[S.sub]();
 }
+/** Заголовок страниц вкладки «Модели»: «← Все модели» слева от заголовка, «Калькулятор» — справа в той же строке. */
+function modelsTitle(title, right = '') {
+  const back = S.sub === 'list' ? '' : '<button class="btn small" data-mnav="list">← Все модели</button>';
+  const calc = S.sub === 'calc' ? '' : '<button class="btn small" data-mnav="calc">₸ Калькулятор</button>';
+  return `<div class="row" style="margin-bottom:12px;gap:12px;align-items:center">${back}<h2 style="margin:0">${title}</h2>
+    <span class="spacer"></span>${right}${calc}</div>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-mnav]');
+  if (b) setTab('models', b.dataset.mnav);
+});
 function renderJobs() {
   $('#main').innerHTML = '<div id="jobs-q"></div><div id="jobs-h" style="margin-top:28px"></div>';
   renderQueue(); renderHistory();
 }
 function renderSettingsPage() {
-  $('#main').innerHTML = '<div id="set-main"></div><div id="set-mat" style="margin-top:28px"></div>';
-  renderSettings(); renderMaterials();
+  $('#main').innerHTML = `<div class="panel row" id="ui-zoom-panel" style="margin-bottom:16px;gap:12px"><b>Масштаб интерфейса</b>
+      <select id="ui-zoom">${[['auto', 'авто (по размеру экрана)'], ['1', '100%'], ['1.25', '125%'], ['1.5', '150%'], ['1.75', '175%'], ['2', '200%']]
+        .map(([v, t]) => `<option value="${v}" ${v === zoomSetting() ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <span class="muted small">сейчас ${Math.round(currentZoom() * 100)}% · также Ctrl + колесо мыши</span></div>
+    <div id="set-main"></div><div id="set-mat" style="margin-top:28px"></div>`;
+  $('#ui-zoom').onchange = (e) => { localStorageSet('zoom', e.target.value); applyZoom(); renderSettingsPage(); };
+  const panel = $('#ui-zoom-panel');
+  // блок масштаба — сразу под заголовком «Настройки»
+  Promise.resolve(renderSettings()).then(() => { const h = $('#set-main h2'); if (h && panel) h.insertAdjacentElement('afterend', panel); });
+  renderMaterials();
 }
+
+// ------------------------------------------------------------------ масштаб интерфейса
+// На больших мониторах (ультраширокие, 4K при масштабе Windows 100%) всё выглядит мелко — увеличиваем сами.
+function zoomSetting() { return localStorageGet('zoom') || 'auto'; }
+function currentZoom() {
+  const v = zoomSetting();
+  if (v !== 'auto') return +v || 1;
+  const w = window.innerWidth;
+  return w >= 3200 ? 1.5 : w >= 2400 ? 1.25 : 1;
+}
+function applyZoom() { document.documentElement.style.zoom = String(currentZoom()); }
+applyZoom();
+let zoomTimer;
+window.addEventListener('resize', () => {
+  if (zoomSetting() !== 'auto') return;
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(() => { const z = String(currentZoom()); if (document.documentElement.style.zoom !== z) applyZoom(); }, 200);
+});
 $('#nav').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setTab(b.dataset.tab); });
 
 // ------------------------------------------------------------------ принтеры
@@ -538,7 +571,7 @@ function editPrinter(cfg, needs = []) {
 async function renderLibrary() {
   const items = await api('/library');
   view('models-body').innerHTML = `
-    <div class="row" style="margin-bottom:12px"><h2 style="margin:0">Модели</h2></div>
+    ${modelsTitle('Модели')}
     <label class="drop" id="drop">Перетащите сюда файлы или нажмите для выбора<br>
       <span class="small">G-code, 3MF (Bambu/Orca/Elegoo/Anycubic), STL/OBJ/3MF-модели, файлы смолы (.goo, .ctb, .pwmx, .pm4n, .pm5…)</span>
       <input type="file" id="file" multiple hidden></label>
@@ -803,10 +836,12 @@ async function renderPrepare() {
   const info = S.info.slicers || [];
   const pr = S.printers[S.prepare.printer];
   view('models-body').innerHTML = `
-  <div class="row" style="margin-bottom:12px">
-    <h2 style="margin:0">Подготовка модели</h2><span class="spacer"></span>
+  <div class="row" style="margin-bottom:12px;gap:12px;align-items:flex-end">
+    <button class="btn small" data-mnav="list" style="align-self:center">← Все модели</button>
+    <h2 style="margin:0;align-self:center">Подготовка модели</h2><span class="spacer"></span>
     <label class="field">Модель<select id="prep-item">${items.map((i) => `<option value="${i.id}" ${i.id === S.prepare.id ? 'selected' : ''}>${esc(i.filename)}</option>`).join('')}</select></label>
     <label class="field">Принтер (область печати)<select id="prep-printer"><option value="">—</option>${printers.map((p) => `<option value="${p.config.id}" ${p.config.id === S.prepare.printer ? 'selected' : ''}>${esc(p.config.name)}</option>`).join('')}</select></label>
+    <button class="btn small" data-mnav="calc" style="align-self:center">₸ Калькулятор</button>
   </div>
   <div class="cols">
     <div class="panel">
@@ -1082,7 +1117,7 @@ async function renderCalc() {
   const [items, materials] = await Promise.all([api('/library'), api('/materials')]);
   S.materials = materials;
   const printers = S.order.map((id) => S.printers[id]).filter(Boolean);
-  view('models-body').innerHTML = `<h2>Калькулятор времени и стоимости</h2>
+  view('models-body').innerHTML = `${modelsTitle('Калькулятор времени и стоимости')}
   <div class="cols"><div class="panel">
     <div class="form">
       <label class="field">Файл из библиотеки<select id="c-item"><option value="">— ввести вручную —</option>${items.map((i) => `<option value="${i.id}" ${i.id === S.calcItem ? 'selected' : ''}>${esc(i.filename)}</option>`).join('')}</select></label>
