@@ -26,7 +26,8 @@ from . import build_info
 log = logging.getLogger("printhub.updater")
 
 ASSET_RE = re.compile(r"^PrintHub[-_]Setup[-_].*\.exe$", re.I)
-CHECK_INTERVAL = 6 * 3600
+CHECK_INTERVAL = 3600            # фоновая проверка раз в час
+KICK_MIN_AGE = 600               # при открытии программы — не чаще раза в 10 минут
 FIRST_CHECK_DELAY = 60
 
 
@@ -55,6 +56,7 @@ class Updater:
             "source": self.source_description(),
         }
         self._task: Optional[asyncio.Task] = None
+        self._kick: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
         self._asset: dict[str, Any] = {}
 
@@ -93,18 +95,32 @@ class Updater:
         if self._task:
             self._task.cancel()
 
+    async def check_and_apply(self) -> None:
+        """Проверить и, если включено автообновление, скачать и установить (когда принтеры не печатают)."""
+        try:
+            await self.check()
+            if self.state["status"] == "available" and self.auto_enabled() and self.state["installed"]:
+                await self.download()
+                await self.install_when_safe()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("обновление: %s", e)
+
+    def kick(self, min_age: float = KICK_MIN_AGE) -> None:
+        """Проверка при открытии программы в браузере: если последняя была давно — проверить сейчас (в фоне)."""
+        busy = self.state.get("status") in ("checking", "downloading", "ready", "waiting", "installing")
+        if busy or (self._kick and not self._kick.done()):
+            return
+        if time.time() - (self.state.get("last_check") or 0) < min_age:
+            return
+        self._kick = asyncio.create_task(self.check_and_apply())
+
     async def _loop(self) -> None:
         await asyncio.sleep(FIRST_CHECK_DELAY)
         while True:
-            try:
-                await self.check()
-                if self.state["status"] == "available" and self.auto_enabled() and self.state["installed"]:
-                    await self.download()
-                    await self.install_when_safe()
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                log.warning("обновление: %s", e)
+            if not (self._kick and not self._kick.done()):
+                await self.check_and_apply()
             await asyncio.sleep(CHECK_INTERVAL)
 
     def auto_enabled(self) -> bool:

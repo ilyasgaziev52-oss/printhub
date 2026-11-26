@@ -19,6 +19,15 @@ from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFi
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+
+class NoCacheStatic(StaticFiles):
+    """Интерфейс без кэша: после обновления браузер сразу берёт новые файлы (без Ctrl+F5)."""
+
+    async def get_response(self, path: str, scope):  # type: ignore[no-untyped-def]
+        r = await super().get_response(path, scope)
+        r.headers["Cache-Control"] = "no-cache"
+        return r
+
 from . import __version__
 from .analysis.lazy import mesh as meshmod
 from .analysis.cost import calc_cost
@@ -854,6 +863,8 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
             await websocket.close(code=4401)
             return
         await websocket.accept()
+        if getattr(app.state, "updater", None):
+            app.state.updater.kick()          # открыли программу — заодно проверить обновления
         q = mgr.subscribe()
         try:
             await websocket.send_text(json.dumps({"type": "hello", "printers": mgr.all_snapshots()},
@@ -867,5 +878,5 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
             mgr.unsubscribe(q)
 
     # ------------------------------------------------------------------ статика
-    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+    app.mount("/", NoCacheStatic(directory=WEB_DIR, html=True), name="web")
     return app

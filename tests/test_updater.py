@@ -81,3 +81,28 @@ async def test_disabled_without_source(tmp_path, monkeypatch):
     upd = Updater(tmp_path, lambda: {}, is_busy=lambda: False)
     st = await upd.check()
     assert st["status"] == "disabled" and not st["installed"]
+
+
+async def test_kick_checks_on_open(tmp_path, monkeypatch):
+    """Открытие программы запускает проверку, если последняя была давно, и не дёргает сервер повторно."""
+    import asyncio
+    import time
+
+    calls = []
+    up = Updater(tmp_path, lambda: {"auto_update": False}, lambda: False)
+
+    async def fake_check():
+        calls.append(1)
+        up.state.update(status="up_to_date", last_check=time.time())
+        return up.state
+    monkeypatch.setattr(up, "check", fake_check)
+    up.kick()
+    await asyncio.sleep(0.05)
+    assert calls == [1]
+    up.kick()                      # только что проверяли — второй раз не надо
+    await asyncio.sleep(0.05)
+    assert calls == [1]
+    up.state["last_check"] = time.time() - 3600
+    up.kick()
+    await asyncio.sleep(0.05)
+    assert calls == [1, 1]
