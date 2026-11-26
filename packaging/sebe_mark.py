@@ -92,3 +92,84 @@ def svg_path_d(scale: float = 100.0) -> str:
     """Средняя линия ленты для SVG (Catmull-Rom → набор отрезков)."""
     pts = _centerline(200) * scale
     return "M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in pts)
+
+
+# ---------------------------------------------------------------- «3D» той же лентой, что и «S»
+Y_STOPS = [(0.08, (42, 207, 210)), (0.32, (0, 169, 194)), (0.55, (25, 183, 143)), (0.70, (126, 220, 74)),
+           (0.92, (47, 174, 76))]
+
+
+def _ycolor(y: float) -> tuple[int, int, int]:
+    """Цвет по высоте: сверху бирюзовый, снизу зелёный — как у знака S."""
+    if y <= Y_STOPS[0][0]:
+        return Y_STOPS[0][1]
+    for (y0, c0), (y1, c1) in zip(Y_STOPS, Y_STOPS[1:]):
+        if y <= y1:
+            k = (y - y0) / (y1 - y0)
+            return tuple(int(round(a + (b - a) * k)) for a, b in zip(c0, c1))
+    return Y_STOPS[-1][1]
+
+
+def _poly(*segs: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for s in segs:
+        out.extend(s)
+    return out
+
+
+def _line(a, b, k=40):
+    return [(a[0] + (b[0] - a[0]) * i / k, a[1] + (b[1] - a[1]) * i / k) for i in range(k + 1)]
+
+
+def _arc(c, rx, ry, th0, th1, k=80):
+    return [(c[0] + rx * np.cos(np.radians(th0 + (th1 - th0) * i / k)),
+             c[1] + ry * np.sin(np.radians(th0 + (th1 - th0) * i / k))) for i in range(k + 1)]
+
+
+def glyphs_3d() -> list[tuple[list[tuple[float, float]], bool, bool]]:
+    """Средние линии «3» и «D» (x 0..1.28, y 0..1); для каждой — шарик в начале / в конце."""
+    three = _poly(_arc((0.30, 0.295), 0.185, 0.185, 205, 450), _line((0.30, 0.48), (0.17, 0.50), 12),
+                  _line((0.17, 0.50), (0.30, 0.52), 12), _arc((0.30, 0.705), 0.20, 0.185, 270, 515))
+    d = _poly(_line((0.78, 0.10), (0.78, 0.90), 50), _line((0.78, 0.90), (0.95, 0.90), 20),
+              _arc((0.95, 0.50), 0.30, 0.40, 90, -90, 90), _line((0.95, 0.10), (0.80, 0.10), 20))
+    return [(three, True, True), (d, False, True)]
+
+
+def draw_3d(height: int, width_ratio: float = 1.30) -> Image.Image:
+    """«3D» лентой в цветах SEBE на прозрачном фоне."""
+    k = 4
+    H = height * k
+    W = int(H * width_ratio)
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    pad = 0.06
+    sc = H * (1 - 2 * pad)
+    r = 0.165 * sc / 2
+    for pts, ball0, ball1 in glyphs_3d():
+        P = [(x * sc + pad * H, y * sc + pad * H) for x, y in pts]
+        for (x, y), (_, yy) in zip(P, pts):
+            c = _ycolor(yy)
+            d.ellipse((x - r, y - r, x + r, y + r), fill=c + (255,))
+        for use, (x, y), (_, yy) in ((ball0, P[0], pts[0]), (ball1, P[-1], pts[-1])):
+            if use:
+                rb = 0.075 * sc
+                d.ellipse((x - rb, y - rb, x + rb, y + rb), fill=_ycolor(yy) + (255,))
+    return im.resize((W // k, H // k), Image.LANCZOS)
+
+
+def svg_3d() -> str:
+    """«3D» лентой для интерфейса (SVG): обводка с градиентом сверху вниз, шарики на концах."""
+    parts = []
+    for pts, ball0, ball1 in glyphs_3d():
+        dd = "M" + " L".join(f"{x * 100:.1f} {y * 100:.1f}" for x, y in pts)
+        parts.append(f'<path d="{dd}"/>')
+        for use, (x, y) in ((ball0, pts[0]), (ball1, pts[-1])):
+            if use:
+                parts.append(f'<circle cx="{x * 100:.1f}" cy="{y * 100:.1f}" r="7.5" fill="url(#g3)" stroke="none"/>')
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 -8 146 116">'
+            '<defs><linearGradient id="g3" x1="0" y1="5" x2="0" y2="95" gradientUnits="userSpaceOnUse">'
+            '<stop offset="0" stop-color="#2ACFD2"/><stop offset=".3" stop-color="#00A9C2"/>'
+            '<stop offset=".55" stop-color="#19B78F"/><stop offset=".72" stop-color="#7EDC4A"/>'
+            '<stop offset="1" stop-color="#2FAE4C"/></linearGradient></defs>'
+            '<g fill="none" stroke="url(#g3)" stroke-width="16.5" stroke-linecap="round" stroke-linejoin="round">'
+            + "".join(parts) + '</g></svg>')

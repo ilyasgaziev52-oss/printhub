@@ -142,3 +142,42 @@ export class ModelViewer {
     this.container.innerHTML = '';
   }
 }
+
+// ------------------------------------------------------------------ превью для каталога
+let thumbRenderer = null;
+/** Рисует превью 3D-модели (STL по ссылке) в фирменных цветах: модель в изометрии на прозрачном фоне. */
+export async function renderThumbnail(url, w = 400, h = 300) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(await resp.text());
+  const geom = new STLLoader().parse(await resp.arrayBuffer());
+  geom.computeVertexNormals();
+  geom.computeBoundingBox();
+  const bb = geom.boundingBox;
+  geom.translate(-(bb.min.x + bb.max.x) / 2, -(bb.min.y + bb.max.y) / 2, -bb.min.z);
+  if (!thumbRenderer) {
+    thumbRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    thumbRenderer.setPixelRatio(1);
+  }
+  thumbRenderer.setSize(w, h, false);
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x6b7b8c, 1.8));
+  const dir = new THREE.DirectionalLight(0xffffff, 1.7);
+  dir.position.set(1, -1.6, 2.2);
+  scene.add(dir);
+  const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x19b4c4, metalness: 0.05, roughness: 0.55 }));
+  scene.add(mesh);
+  const box = new THREE.Box3().setFromObject(mesh);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const r = Math.max(size.length() / 2, 1);
+  const cam = new THREE.PerspectiveCamera(32, w / h, r / 100, r * 100);
+  cam.up.set(0, 0, 1);
+  const d = r / Math.sin((32 * Math.PI / 180) / 2) * 1.05;
+  const v = new THREE.Vector3(0.62, -0.95, 0.62).normalize();
+  cam.position.copy(center).addScaledVector(v, d);
+  cam.lookAt(center);
+  thumbRenderer.render(scene, cam);
+  const data = thumbRenderer.domElement.toDataURL('image/png');
+  geom.dispose(); mesh.material.dispose();
+  return data;
+}

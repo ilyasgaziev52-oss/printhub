@@ -1,5 +1,5 @@
-"""Значок SEBE 3D (printhub.ico) в айдентике SEBE: белая плашка со знаком «S» —
-лента с шариками на концах, переход от бирюзового к зелёному (см. sebe_mark.py).
+"""Значок SEBE 3D (printhub.ico) в айдентике SEBE: белая плашка, знак «S» и под ним «3D» той же лентой
+с шариками на концах, переход от бирюзового к зелёному (см. sebe_mark.py). На 16–24 px — только «S».
 Готовый значок лежит в packaging/sebe3d.ico — сборка берёт его.
 Перерисовать: python packaging/make_icon.py packaging/sebe3d.ico
 Ещё пишет SVG знака для интерфейса: python packaging/make_icon.py --svg printhub/web/logo-s.svg
@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sebe_mark import BALL, WIDTH, _centerline  # noqa: E402
-from sebe_mark import draw_mark  # noqa: E402
+from sebe_mark import draw_3d, draw_mark, svg_3d  # noqa: E402
 
 TILE = (255, 255, 255, 255)
 
@@ -23,10 +23,15 @@ def draw(size: int) -> Image.Image:
     im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     d.rounded_rectangle((8 * s, 8 * s, 248 * s, 248 * s), radius=56 * s, fill=TILE)
-    mk = 0.86 if size <= 24 else 0.78           # на мелких размерах знак крупнее
-    m = draw_mark(int(256 * mk * s))
-    off = int((S - m.size[0]) / 2)
-    im.paste(m, (off, off + int(2 * s)), m)
+    if size <= 24:                               # мелко: только знак «S», крупно
+        m = draw_mark(int(256 * 0.86 * s))
+        off = int((S - m.size[0]) / 2)
+        im.paste(m, (off, off + int(2 * s)), m)
+    else:                                        # «S» сверху, «3D» лентой снизу
+        m = draw_mark(int(256 * 0.42 * s))
+        t = draw_3d(int(256 * 0.36 * s))
+        im.paste(m, (int((S - m.size[0]) / 2), int(256 * 0.08 * s)), m)
+        im.paste(t, (int((S - t.size[0]) / 2), int(256 * 0.52 * s)), t)
     return im.resize((size, size), Image.LANCZOS)
 
 
@@ -51,6 +56,9 @@ def svg_mark() -> str:
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--svg":
         Path(sys.argv[2]).write_text(svg_mark(), encoding="utf-8")
+        raise SystemExit(0)
+    if len(sys.argv) > 2 and sys.argv[1] == "--svg3d":
+        Path(sys.argv[2]).write_text(svg_3d(), encoding="utf-8")
         raise SystemExit(0)
     out = sys.argv[1] if len(sys.argv) > 1 else "printhub.ico"
     sizes = [16, 24, 32, 48, 64, 128, 256]

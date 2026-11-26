@@ -567,49 +567,118 @@ function editPrinter(cfg, needs = []) {
   }
 }
 
-// ------------------------------------------------------------------ библиотека
+// ------------------------------------------------------------------ каталог моделей
+const isMold = (it) => it.kind === 'mesh' && /_(opalubka|forma)\.3mf$/i.test(it.filename);
+const CATS = [
+  ['all', 'Все', () => true],
+  ['models', 'Модели', (it) => it.kind === 'mesh' && !isMold(it)],
+  ['molds', 'Опалубки', isMold],
+  ['print', 'Для печати', (it) => it.kind !== 'mesh'],
+];
+const CAT_EMPTY = {
+  all: 'Каталог пуст — нажмите «＋ Новая модель» или перетащите файлы в окно',
+  models: 'Моделей пока нет — нажмите «＋ Новая модель» (STL, OBJ, 3MF)',
+  molds: 'Опалубок пока нет — откройте модель и нажмите «🧱 Опалубка»',
+  print: 'Файлов для печати пока нет — нарежьте модель («🛠 Подготовка») или загрузите G-code / 3MF / файл смолы',
+};
+
 async function renderLibrary() {
   const items = await api('/library');
-  view('models-body').innerHTML = `
-    ${modelsTitle('Модели')}
-    <label class="drop" id="drop">Перетащите сюда файлы или нажмите для выбора<br>
-      <span class="small">G-code, 3MF (Bambu/Orca/Elegoo/Anycubic), STL/OBJ/3MF-модели, файлы смолы (.goo, .ctb, .pwmx, .pm4n, .pm5…)</span>
-      <input type="file" id="file" multiple hidden></label>
-    <div id="uploads" class="small muted" style="margin:8px 0"></div>
-    <div class="panel" style="margin-top:12px">
-    ${items.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>Файл</th><th>Тип</th><th class="num">Время</th><th class="num">Материал</th><th class="num">Размер</th><th>Добавлен</th><th></th></tr></thead><tbody>
-      ${items.map((it) => {
-        const s = it.summary || {};
-        const mat = s.material_ml ? fmtNum(s.material_ml, 1) + ' мл' : s.material_g ? fmtNum(s.material_g, 1) + ' г' : '—';
-        return `<tr><td>${it.has_thumb ? `<img class="thumb" loading="lazy" src="/api/library/${it.id}/thumbnail" alt="">` : '<div class="thumb"></div>'}</td>
-          <td style="overflow-wrap:anywhere"><b>${esc(it.filename)}</b>${it.analysis.error ? `<div class="small" style="color:var(--err)">${esc(it.analysis.error)}</div>` : ''}${it.plates > 1 ? `<div class="small muted">пластин: ${it.plates}</div>` : ''}</td>
-          <td class="small">${esc(KIND_RU[it.kind] || it.kind)}</td>
-          <td class="num">${s.time_s ? fmtDur(s.time_s) : '—'}${it.kind === 'mesh' && s.time_s ? '*' : ''}</td><td class="num">${mat}</td>
-          <td class="num">${fmtSize(it.size)}</td><td class="small">${fmtDate(it.uploaded_at)}</td>
-          <td style="white-space:nowrap">
-            ${it.kind !== 'mesh' && it.kind !== 'other' ? `<button class="btn small primary" data-send="${it.id}">▶ На печать</button>` : ''}
-            ${it.kind === 'mesh' ? `<button class="btn small primary" data-prep="${it.id}">🛠 Подготовка</button>
-              ${/_(opalubka|forma)\.3mf$/i.test(it.filename) ? '' : `<button class="btn small" data-mold="${it.id}" title="Опалубка под силикон или разъёмная форма для литья">🧱 Опалубка</button>`}` : ''}
-            <button class="btn small" data-info="${it.id}" title="Подробности">ℹ</button>
-            <button class="btn small" data-cost="${it.id}" title="Стоимость">₽</button>
-            <a class="btn small" href="/api/library/${it.id}/download" title="Скачать">⬇</a>
-            <button class="btn small danger" data-del="${it.id}" title="Удалить">🗑</button></td></tr>`;
-      }).join('')}</tbody></table></div>
-      <p class="small muted">* для 3D-моделей время и расход — приблизительная оценка до нарезки.</p>` : '<div class="empty">Библиотека пуста</div>'}
-    </div>`;
-  const drop = $('#drop'), input = $('#file');
-  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); uploadFiles(e.dataTransfer.files); });
+  S.cat = S.cat || localStorageGet('cat') || 'all';
+  S.q = S.q || '';
+  const el = view('models-body');
+  const counts = Object.fromEntries(CATS.map(([id, , f]) => [id, items.filter(f).length]));
+  el.innerHTML = `
+    ${modelsTitle('Каталог моделей', '<button class="btn primary" id="new-model">＋ Новая модель</button>')}
+    <input type="file" id="file" multiple hidden>
+    <div class="row cat-bar">
+      <div class="chips">${CATS.map(([id, t]) => `<button class="chip ${id === S.cat ? 'active' : ''}" data-cat="${id}">${t} <span>${counts[id]}</span></button>`).join('')}</div>
+      <span class="spacer"></span>
+      <input id="cat-q" type="search" placeholder="Поиск по названию" value="${esc(S.q)}" style="width:240px">
+    </div>
+    <div id="uploads" class="small muted"></div>
+    <div id="catalog" class="catalog"></div>
+    <p class="small muted drop-hint">Файлы можно просто перетащить в это окно: модели STL/OBJ/3MF, G-code, 3MF из слайсера, файлы смолы.</p>`;
+  const fill = () => {
+    const f = (CATS.find(([id]) => id === S.cat) || CATS[0])[2];
+    const q = S.q.trim().toLowerCase();
+    const list = items.filter(f).filter((it) => !q || it.filename.toLowerCase().includes(q));
+    const box = $('#catalog');
+    if (!list.length) { box.innerHTML = `<div class="panel empty" style="grid-column:1/-1">${q ? 'Ничего не найдено' : CAT_EMPTY[S.cat]}</div>`; return; }
+    box.innerHTML = list.map(catalogCard).join('');
+    bindCatalog(box);
+    list.filter((it) => it.kind === 'mesh' && !it.has_thumb).forEach((it) => queueThumb(it.id));
+  };
+  fill();
+  $$('[data-cat]', el).forEach((b) => { b.onclick = () => { S.cat = b.dataset.cat; localStorageSet('cat', S.cat); renderLibrary(); }; });
+  $('#cat-q').oninput = (e) => { S.q = e.target.value; fill(); };
+  const input = $('#file');
+  $('#new-model').onclick = () => input.click();
   input.onchange = () => uploadFiles(input.files);
-  $$('[data-send]').forEach((b) => { b.onclick = () => sendDialog(b.dataset.send); });
-  $$('[data-prep]').forEach((b) => { b.onclick = () => { S.prepare.id = b.dataset.prep; localStorageSet('prepare_id', S.prepare.id); setTab('prepare'); }; });
-  $$('[data-info]').forEach((b) => { b.onclick = () => itemInfo(b.dataset.info); });
-  $$('[data-mold]').forEach((b) => { b.onclick = () => moldDialog(b.dataset.mold); });
-  $$('[data-cost]').forEach((b) => { b.onclick = () => { S.calcItem = b.dataset.cost; setTab('calc'); }; });
-  $$('[data-del]').forEach((b) => {
-    b.onclick = async () => { if (confirmBox('Удалить файл из библиотеки?')) { await guard(() => api(`/library/${b.dataset.del}`, { method: 'DELETE' })); renderLibrary(); } };
+  // перетаскивание файлов в любое место страницы
+  const main = $('#main');
+  main.ondragover = (e) => { e.preventDefault(); main.classList.add('drag-over'); };
+  main.ondragleave = (e) => { if (e.target === main) main.classList.remove('drag-over'); };
+  main.ondrop = (e) => { e.preventDefault(); main.classList.remove('drag-over'); if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); };
+}
+
+function catalogCard(it) {
+  const s = it.summary || {};
+  const mat = s.material_ml ? fmtNum(s.material_ml, 1) + ' мл' : s.material_g ? fmtNum(s.material_g, 1) + ' г' : '';
+  const kind = isMold(it) ? 'Опалубка / форма' : (KIND_RU[it.kind] || it.kind);
+  const meta = [kind, s.time_s ? fmtDur(s.time_s) + (it.kind === 'mesh' ? '*' : '') : '', mat, fmtSize(it.size)].filter(Boolean).join(' · ');
+  const thumb = it.has_thumb ? `<img loading="lazy" src="/api/library/${it.id}/thumbnail" alt="">`
+    : `<div class="cthumb-ph">${it.kind === 'mesh' ? '⏳' : it.kind === 'resin' ? '🧪' : '🧾'}</div>`;
+  const main = it.kind === 'mesh'
+    ? `<button class="btn small primary" data-prep="${it.id}">🛠 Подготовка</button>${isMold(it) ? '' : `<button class="btn small" data-mold="${it.id}" title="Опалубка под силикон или разъёмная форма для литья">🧱 Опалубка</button>`}`
+    : it.kind !== 'other' ? `<button class="btn small primary" data-send="${it.id}">▶ На печать</button>` : '';
+  return `<div class="panel citem" data-id="${it.id}">
+    <div class="cthumb" data-thumb="${it.id}">${thumb}</div>
+    <div class="cbody">
+      <div class="cname" title="${esc(it.filename)}">${esc(it.filename)}</div>
+      <div class="small muted">${esc(meta)}</div>
+      ${it.analysis && it.analysis.error ? `<div class="small" style="color:var(--err)">${esc(it.analysis.error)}</div>` : ''}
+      <div class="cact">${main}</div>
+      <div class="cicons">
+        <button class="btn small" data-info="${it.id}" title="Подробности">ℹ</button>
+        <button class="btn small" data-cost="${it.id}" title="Стоимость">₸</button>
+        <a class="btn small" href="/api/library/${it.id}/download" title="Скачать">⬇</a>
+        <button class="btn small danger" data-del="${it.id}" title="Удалить">🗑</button></div>
+    </div></div>`;
+}
+
+function bindCatalog(box) {
+  $$('[data-send]', box).forEach((b) => { b.onclick = () => sendDialog(b.dataset.send); });
+  $$('[data-prep]', box).forEach((b) => { b.onclick = () => { S.prepare.id = b.dataset.prep; localStorageSet('prepare_id', S.prepare.id); setTab('models', 'prepare'); }; });
+  $$('[data-info]', box).forEach((b) => { b.onclick = () => itemInfo(b.dataset.info); });
+  $$('[data-mold]', box).forEach((b) => { b.onclick = () => moldDialog(b.dataset.mold); });
+  $$('[data-cost]', box).forEach((b) => { b.onclick = () => { S.calcItem = b.dataset.cost; setTab('models', 'calc'); }; });
+  $$('[data-del]', box).forEach((b) => {
+    b.onclick = async () => { if (confirmBox('Удалить файл из каталога?')) { await guard(() => api(`/library/${b.dataset.del}`, { method: 'DELETE' })); renderLibrary(); } };
   });
+}
+
+// превью 3D-моделей: рисуются по очереди в браузере и сохраняются на сервере
+const thumbQueue = [];
+let thumbBusy = false;
+function queueThumb(id) {
+  if (!thumbQueue.includes(id)) thumbQueue.push(id);
+  if (!thumbBusy) runThumbs();
+}
+async function runThumbs() {
+  thumbBusy = true;
+  try {
+    const { renderThumbnail } = await import('./viewer.js');
+    while (thumbQueue.length) {
+      const id = thumbQueue.shift();
+      try {
+        const data = await renderThumbnail(`/api/library/${id}/mesh.stl`);
+        await api(`/library/${id}/thumbnail`, { method: 'POST', json: { data_url: data } });
+        const slot = $(`[data-thumb="${id}"]`);
+        if (slot) slot.innerHTML = `<img src="${data}" alt="">`;
+      } catch { const slot = $(`[data-thumb="${id}"]`); if (slot) slot.innerHTML = '<div class="cthumb-ph">🧊</div>'; }
+    }
+  } finally { thumbBusy = false; }
 }
 
 function uploadFiles(files) {
@@ -629,7 +698,7 @@ function uploadFiles(files) {
     };
     xhr.onerror = () => { row.textContent = `✗ ${file.name}: ошибка сети`; resolve(); };
     xhr.send(fd);
-  }))).then(() => { if (S.tab === 'library') renderLibrary(); });
+  }))).then(() => { if (S.tab === 'models' && S.sub === 'list') renderLibrary(); });
 }
 
 // ------------------------------------------------------------------ опалубка / форма для литья
