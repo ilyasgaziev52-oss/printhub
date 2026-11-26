@@ -117,3 +117,20 @@ def test_contour_mold_saves_silicone():
         assert p.mesh.is_watertight and len(p.mesh.split(only_watertight=False)) == 1
     # объём силикона ≈ «модель + отступ 7 мм» по слоям минус модель — в разумных пределах
     assert 0.2 * i["box_silicone_g"] < i["silicone_g"] < 0.7 * i["box_silicone_g"]
+
+
+def test_two_part_picks_vertical_split_for_column():
+    # колонна с дисками: при горизонтальном разъёме диски — поднутрения, при вертикальном их нет
+    parts = [trimesh.creation.cylinder(radius=5, height=80).apply_translation([0, 0, 40])]
+    parts += [trimesh.creation.cylinder(radius=12, height=4).apply_translation([0, 0, z]) for z in (20, 40, 60)]
+    col = trimesh.boolean.union(parts, engine="manifold")
+    r = mold.make_mold(col, "two_part", {"wall": 10})
+    i = r.info
+    assert i["split_axis"] in ("x", "y") and "вертикальн" in i["split_desc"]
+    assert i["undercut_by_axis"]["z"] > 5 and i["undercut_cm2"] < 0.5 and not r.warnings
+    assert max(i["mold_mm"]) == pytest.approx(80 + 20, abs=0.5)                     # форма вдоль всей высоты модели
+    for p in r.parts:                                                                # замки срослись с половинами
+        assert p.mesh.is_watertight and len(p.mesh.split(only_watertight=False)) == 1, p.name
+    # можно заставить резать горизонтально
+    rz = mold.make_mold(col, "two_part", {"axis": "z"})
+    assert rz.info["split_axis"] == "z" and rz.warnings

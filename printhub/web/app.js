@@ -729,7 +729,9 @@ async function moldDialog(id) {
       <div class="form form-2">
         <label class="field">Что заливать<select name="material">${mats.filter((x) => x.id !== 'silicone').map((x) => `<option value="${x.id}">${esc(x.name)} — ${x.density} г/см³</option>`).join('')}</select></label>
         <label class="field">Толщина формы, мм<input name="wall2" type="number" value="10" step="1" min="6"></label>
-        <label class="field" title="Пусто — программа сама выберет самое широкое место модели">Высота разъёма, мм<input name="split" type="number" step="0.5" placeholder="авто — по самому широкому месту"></label>
+        <label class="field" title="Программа пробует горизонтальный и вертикальные разъёмы и берёт тот, где отливка выходит легче всего">Направление разъёма<select name="axis">
+          <option value="auto" selected>авто — где меньше поднутрений</option><option value="z">горизонтально</option><option value="vertical">вертикально (вдоль высоты)</option></select></label>
+        <label class="field" title="Только для горизонтального разъёма. Пусто — по самому широкому месту модели">Высота разъёма, мм<input name="split" type="number" step="0.5" placeholder="авто"></label>
         <label class="field">Диаметр литника, мм<input name="sprue_d" type="number" value="6" step="0.5" min="3"></label>
       </div>
       <div class="checks">
@@ -757,7 +759,7 @@ async function moldDialog(id) {
     const k = kind();
     const options = k === 'silicone_box'
       ? { shape: g('shape').value, gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, fastening: g('fastening').value, with_base: g('with_base').checked }
-      : { material: g('material').value, wall: +g('wall2').value, split: g('split').value === '' ? 'auto' : +g('split').value,
+      : { material: g('material').value, wall: +g('wall2').value, axis: g('axis').value, split: g('split').value === '' || g('axis').value === 'vertical' ? 'auto' : +g('split').value,
           sprue_d: +g('sprue_d').value, vents: g('vents').checked, keys: g('keys').checked, bolts: g('bolts2').checked };
     const btn = $('#mold-go', f); btn.disabled = true; btn.textContent = 'Строю…';
     const r = await guard(() => api(`/library/${id}/mold`, { method: 'POST', json: { kind: k, options } }));
@@ -768,7 +770,8 @@ async function moldDialog(id) {
       ? `<li>Силикона: <b>${fmtNum(i.silicone_g, 0)} г</b> (${fmtNum(i.silicone_cm3, 0)} см³), с запасом 10% — <b>${fmtNum(i.silicone_g_with_reserve, 0)} г</b></li>
          ${i.box_silicone_g ? `<li>Экономия: <b>${i.saved_pct}%</b> — прямоугольному коробу понадобилось бы ${fmtNum(i.box_silicone_g, 0)} г</li>` : ''}
          <li>Уровень заливки: ${fmtNum(i.fill_height_mm, 0)} мм от дна, ${i.shape === 'contour' ? 'по низу' : 'внутри'} ${i.inner_mm.slice(0, 2).join(' × ')} мм</li>`
-      : `<li>Разъём на высоте <b>${fmtNum(i.split_mm, 1)} мм</b>${i.split_auto ? ' (по самому широкому месту)' : ''}</li>
+      : `<li>Разъём: <b>${esc(i.split_desc || `на высоте ${fmtNum(i.split_mm, 1)} мм`)}</b>${i.split_auto && i.split_axis === 'z' ? ' (по самому широкому месту)' : ''}</li>
+         ${i.undercut_by_axis && Object.keys(i.undercut_by_axis).length > 1 ? `<li class="muted">Поднутрения: ${Object.entries(i.undercut_by_axis).map(([a, v]) => `${a === 'z' ? 'горизонт.' : 'поперёк ' + a.toUpperCase()} — ${fmtNum(v, 1)} см²`).join(', ')}</li>` : ''}
          <li>Материала на отливку: <b>${fmtNum(i.cast_g, 0)} г</b> (${fmtNum(i.cast_cm3, 1)} см³), с запасом — ${fmtNum(i.cast_g_with_reserve, 0)} г</li>
          <li>Размер формы: ${i.mold_mm.join(' × ')} мм, воздушников: ${i.vents}</li>`;
     $('#mold-res', f).innerHTML = `<div class="panel">

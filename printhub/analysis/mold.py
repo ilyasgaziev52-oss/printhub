@@ -381,7 +381,9 @@ def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResul
 @dataclass
 class TwoPartOptions:
     wall: float = 10.0               # толщина формы вокруг модели
-    split: Optional[float] = None    # высота разъёма от низа модели, мм; None — по самому широкому сечению
+    split: Optional[float] = None    # высота разъёма от низа модели, мм (горизонтальный разъём); None — авто
+    axis: str = "auto"               # направление разъёма: auto — с наименьшими поднутрениями; z — горизонтальный;
+                                     # vertical — вертикальный (x или y, что лучше)
     sprue_d: float = 6.0             # диаметр литника
     vents: bool = True               # воздушники от верхних точек модели
     keys: bool = True                # замки-полусферы
@@ -428,31 +430,103 @@ def _peaks(tm: trimesh.Trimesh, split: float, cells: int = 4) -> list[np.ndarray
     return sorted(out, key=lambda p: -p[2])
 
 
+# направления разъёма: поворот модели, после которого плоскость разъёма горизонтальна (ось → z),
+# матрица этого поворота и куда после него смотрит «верх» модели (для литника)
+SPLIT_AXES = {
+    "z": ((0, 0, 0), np.eye(3), np.array([0.0, 0.0, 1.0]), "horizontal"),
+    "x": ((0, 90, 0), np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], float), np.array([1.0, 0.0, 0.0]), "vertical"),
+    "y": ((-90, 0, 0), np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float), np.array([0.0, 1.0, 0.0]), "vertical"),
+}
+
+
+def _oriented(model: Manifold, axis: str) -> tuple[Manifold, np.ndarray, np.ndarray]:
+    """Модель в системе, где разъём горизонтален; возвращает (модель, матрица, сдвиг) для пересчёта точек."""
+    rot, R, _, _ = SPLIT_AXES[axis]
+    m = model.rotate(rot) if axis != "z" else model
+    bb = m.bounding_box()
+    shift = np.array([-(bb[0] + bb[3]) / 2, -(bb[1] + bb[4]) / 2, -bb[2]])
+    return m.translate(tuple(shift)), R, shift
+
+
+def _choose_axis(model: Manifold, o: "TwoPartOptions") -> tuple[str, float, float, dict[str, float]]:
+    """Перебор направлений: для каждого — разъём по самому широкому сечению и площадь поднутрений.
+    Горизонтальный предпочитаем при почти равных поднутрениях (его проще заливать)."""
+    want = o.axis if o.axis in SPLIT_AXES else "auto"
+    cands = ["z"] if (want == "z" or o.split is not None) else (["x", "y"] if want == "vertical"
+                                                                 else [want] if want in ("x", "y") else ["z", "x", "y"])
+    scores: dict[str, float] = {}
+    best: Optional[tuple[str, float, float]] = None
+    for ax in cands:
+        m, _, _ = _oriented(model, ax)
+        h = m.bounding_box()[5]
+        sp = float(o.split) if (o.split is not None and ax == "z") else widest_split(m, h)
+        sp = min(max(sp, 1.0), h - 1.0)
+        und = undercut_area(to_trimesh(m), sp)
+        scores[ax] = round(und, 2)
+        if best is None or und < best[2] - max(0.3, best[2] * 0.15):
+            best = (ax, sp, und)
+    assert best is not None
+    return best[0], best[1], best[2], scores
+
+
 def two_part(model_tm: trimesh.Trimesh, o: TwoPartOptions | None = None) -> MoldResult:
     o = o or TwoPartOptions()
-    model = centered(to_manifold(model_tm))
+    model0 = centered(to_manifold(model_tm))
+    tm0 = to_trimesh(model0)
+    h0 = model0.bounding_box()[5]
+    axis, split, und, scores = _choose_axis(model0, o)
+    model, R, shift = _oriented(model0, axis)
+    up = SPLIT_AXES[axis][2]                           # «верх» модели в системе формы
+    k_up = int(np.argmax(np.abs(up)))
+    to_mold = lambda pt: R @ np.asarray(pt, float) + shift   # noqa: E731
     x0, y0, _, x1, y1, h = model.bounding_box()
-    tm = to_trimesh(model)
-    split = float(o.split) if o.split is not None else widest_split(model, h)
-    split = min(max(split, 1.0), h - 1.0)
     W, D = (x1 - x0) + 2 * o.wall, (y1 - y0) + 2 * o.wall
     z_lo, z_hi = -o.wall, h + o.wall
     block = Manifold.extrude(rrect(W, D, 3.0), z_hi - z_lo).translate((0, 0, z_lo))
     cav = block - model
+    lim_hi = np.array([W / 2, D / 2, z_hi])
 
-    # литник с воронкой — от самой высокой точки модели; воздушники — от остальных вершин
-    peaks = _peaks(tm, split)
-    top = peaks[0] if peaks else tm.vertices[np.argmax(tm.vertices[:, 2])]
+    # литник с воронкой — от самой высокой точки модели (как её будут заливать), воздушники — от других вершин
+    peaks = _peaks(tm0, split if axis == "z" else h0 * 0.45)
+    top0 = peaks[0] if peaks else tm0.vertices[np.argmax(tm0.vertices[:, 2])]
     sr = o.sprue_d / 2
-    channels = rod("z", sr, float(top[2]) - 1.0, z_hi + 1, float(top[0]), float(top[1]))
-    funnel = Manifold.cylinder(6.0, sr, sr * 2.2, 48).translate((float(top[0]), float(top[1]), z_hi - 5.99))
+    names = "xyz"
+
+    vmold = tm0.vertices @ R.T + shift
+
+    def entry(p0: np.ndarray) -> np.ndarray:
+        """Точка входа канала в системе формы. При вертикальном разъёме канал кладём прямо на линию разъёма
+        (половина канала в каждой половине формы — легко вынуть и почистить), если верх модели её пересекает."""
+        pt = to_mold(p0)
+        if k_up == 2:
+            return pt
+        near = vmold[(np.abs(vmold[:, k_up] - pt[k_up]) < 1.5) & (np.linalg.norm(vmold[:, :2] - pt[:2], axis=1) < 25)]
+        if len(near) and near[:, 2].min() <= split <= near[:, 2].max():
+            on = near[np.argmin(np.abs(near[:, 2] - split))]
+            pt = np.array([on[0], on[1], split])
+        return pt
+
+    def channel(pt: np.ndarray, r: float) -> Manifold:
+        a0, a1 = pt[k_up] - 1.0, lim_hi[k_up] + 1.0
+        q = [pt[t] for t in range(3) if t != k_up]
+        return rod(names[k_up], r, float(a0), float(a1), float(q[0]), float(q[1]))
+
+    tp = entry(top0)
+    channels = channel(tp, sr)
+    cone = Manifold.cylinder(6.0, sr, sr * 2.2, 48)
+    if k_up == 0:
+        funnel = cone.rotate((0, 90, 0)).translate((lim_hi[0] - 5.99, float(tp[1]), float(tp[2])))
+    elif k_up == 1:
+        funnel = cone.rotate((-90, 0, 0)).translate((float(tp[0]), lim_hi[1] - 5.99, float(tp[2])))
+    else:
+        funnel = cone.translate((float(tp[0]), float(tp[1]), z_hi - 5.99))
     channels += funnel
     vents = []
     if o.vents:
-        for p in peaks[1:]:
-            if np.linalg.norm(p[:2] - top[:2]) > 8 and len(vents) < 4:
-                vents.append(p)
-                channels += rod("z", 1.0, float(p[2]) - 0.5, z_hi + 1, float(p[0]), float(p[1]))
+        for pk in peaks[1:]:
+            if np.linalg.norm(pk[:2] - top0[:2]) > 8 and len(vents) < 4:
+                vents.append(pk)
+                channels += channel(entry(pk), 1.0)
     cav -= channels
 
     big = 10 * (W + D + h)
@@ -465,8 +539,8 @@ def two_part(model_tm: trimesh.Trimesh, o: TwoPartOptions | None = None) -> Mold
         kr = min(4.0, o.wall / 2 - 1.0)
         for sx in (-1, 1):
             for sy in (-1, 1):
-                s = Manifold.sphere(kr, 32).translate((sx * kx, sy * ky, split))
-                bottom += s ^ box(-big, big, -big, big, split, big)
+                sph = Manifold.sphere(kr, 32).translate((sx * kx, sy * ky, split))
+                bottom += sph ^ box(-big, big, -big, big, split - 0.3, big)       # чуть утоплена — срастается с формой
                 upper -= Manifold.sphere(kr + o.clearance, 32).translate((sx * kx, sy * ky, split))
     # болты M4 насквозь: посередине длинных сторон
     bolt_txt = ""
@@ -481,24 +555,32 @@ def two_part(model_tm: trimesh.Trimesh, o: TwoPartOptions | None = None) -> Mold
         L = int(math.ceil((z_hi - z_lo + 8) / 5) * 5)
         bolt_txt = (f"{n} болта M4×{L} с гайками" if L <= 60 else f"{n} шпильки M4 длиной {L} мм с гайками") + \
             " — или просто струбцины / резинки"
-    # пазы для разъёма отвёрткой — на двух торцах по линии разъёма
-    for sx in (-1, 1):
-        notch = box(sx * W / 2 - 3, sx * W / 2 + 3, -5, 5, split - 1.0, split + 1.0)
+    # пазы для разъёма отвёрткой — на двух торцах по линии разъёма (не там, где выходит литник)
+    for sgn in (-1, 1):
+        if k_up == 0:
+            notch = box(-5, 5, sgn * D / 2 - 3, sgn * D / 2 + 3, split - 1.0, split + 1.0)
+        else:
+            notch = box(sgn * W / 2 - 3, sgn * W / 2 + 3, -5, 5, split - 1.0, split + 1.0)
         bottom -= notch
         upper -= notch
     # верхняя половина печатается разъёмом вверх — полость открыта, поддержки внутри не нужны
     upper = upper.rotate((180, 0, 0))
 
-    und = undercut_area(tm, split)
-    total = float(tm.area) / 100.0
+    total = float(tm0.area) / 100.0
     warnings = []
     if und > max(0.5, total * 0.02):
-        warnings.append(f"Поднутрения {und:.1f} см² ({und / total * 100:.0f}% поверхности): отливка может застрять "
-                        "в жёсткой форме. Поверните модель, задайте другую высоту разъёма или сделайте силиконовую форму.")
+        warnings.append(f"Поднутрения {und:.1f} см² ({und / total * 100:.0f}% поверхности) при лучшем направлении разъёма: "
+                        "отливка может застрять в жёсткой форме. Для такой модели лучше силиконовая форма.")
+    vertical = SPLIT_AXES[axis][3] == "vertical"
+    desc = (f"вертикальный, поперёк оси {axis.upper()} — модель режется вдоль высоты" if vertical
+            else f"горизонтальный, на высоте {split:.1f} мм")
     vol_cm3 = model.volume() / 1000.0
     info = {
         "split_mm": round(split, 1),
         "split_auto": o.split is None,
+        "split_axis": axis,
+        "split_desc": desc,
+        "undercut_by_axis": scores,
         "mold_mm": [round(W, 1), round(D, 1), round(z_hi - z_lo, 1)],
         "cast_cm3": round(vol_cm3, 1),
         "cast_g": round(vol_cm3 * o.density, 0),
@@ -511,12 +593,14 @@ def two_part(model_tm: trimesh.Trimesh, o: TwoPartOptions | None = None) -> Mold
             "Обработайте полость разделителем (вазелин, воск или спрей-разделитель)",
             "Сложите половины по замкам и стяните " + ("болтами, резинками или струбцинами" if bolt_txt
                                                        else "резинками, струбцинами или прищепками"),
-            f"Заливайте через воронку литника до появления материала в воздушниках ({len(vents)} шт.)"
-            if vents else "Заливайте через воронку литника медленно, постукивая по форме, чтобы вышел воздух",
-            "После застывания разнимите форму отвёрткой через пазы на торцах и срежьте литник",
+            ("Поставьте форму воронкой вверх (модель стоит вертикально) и заливайте" if vertical else "Заливайте") +
+            (f" через воронку литника до появления материала в воздушниках ({len(vents)} шт.)" if vents
+             else " через воронку литника медленно, постукивая по форме, чтобы вышел воздух"),
+            "После застывания разнимите форму отвёрткой через пазы по линии разъёма и срежьте литник",
         ],
     }
-    parts = [_part("Форма — низ", bottom), _part("Форма — верх", upper)]
+    parts = [_part("Форма — половина 1" if vertical else "Форма — низ", bottom),
+             _part("Форма — половина 2" if vertical else "Форма — верх", upper)]
     return MoldResult("two_part", parts, info, warnings)
 
 
