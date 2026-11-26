@@ -711,27 +711,36 @@ async function moldDialog(id) {
       <label class="row"><input type="radio" name="mk" value="two_part"> <b>Разъёмная форма для литья</b></label>
     </div>
     <p class="small muted" id="mk-help"></p>
-    <div class="form" data-k="silicone_box">
-      <label class="field">Зазор до модели (толщина силикона), мм<input name="gap" type="number" value="8" step="0.5" min="3"></label>
-      <label class="field">Силикон над моделью, мм<input name="over" type="number" value="8" step="0.5" min="3"></label>
-      <label class="field">Толщина стенок опалубки, мм<input name="wall" type="number" value="2.4" step="0.2" min="1.2"></label>
-      <label class="row small"><input type="checkbox" name="bolts" checked> проушины под болты M3</label>
-      <label class="row small"><input type="checkbox" name="with_base"> печатать дно (обычно не нужно — стенки ставятся на стол)</label>
+    <div data-k="silicone_box">
+      <div class="form form-2">
+        <label class="field" title="Расстояние от модели до стенки — это толщина силиконовой формы по бокам">Толщина силикона вокруг, мм<input name="gap" type="number" value="8" step="0.5" min="3"></label>
+        <label class="field">Силикон над моделью, мм<input name="over" type="number" value="8" step="0.5" min="3"></label>
+        <label class="field">Стенки опалубки, мм<input name="wall" type="number" value="2.4" step="0.2" min="1.2"></label>
+        <label class="field">Крепление стенок<select name="fastening">
+          <option value="clips" selected>прищепки / зажимы</option><option value="bolts">болты M3</option><option value="none">без креплений</option></select></label>
+      </div>
+      <div class="checks">
+        <label title="Обычно не нужно — стенки ставятся на ровный стол вокруг модели"><input type="checkbox" name="with_base"> печатать дно</label>
+      </div>
     </div>
-    <div class="form hidden" data-k="two_part">
-      <label class="field">Что заливать<select name="material">${mats.filter((x) => x.id !== 'silicone').map((x) => `<option value="${x.id}">${esc(x.name)} — ${x.density} г/см³</option>`).join('')}</select></label>
-      <label class="field">Толщина формы, мм<input name="wall2" type="number" value="10" step="1" min="6"></label>
-      <label class="field">Высота разъёма от низа модели, мм (пусто — авто по самому широкому месту)<input name="split" type="number" step="0.5" placeholder="авто"></label>
-      <label class="field">Диаметр литника, мм<input name="sprue_d" type="number" value="6" step="0.5" min="3"></label>
-      <label class="row small"><input type="checkbox" name="vents" checked> воздушники</label>
-      <label class="row small"><input type="checkbox" name="keys" checked> замки-полусферы</label>
-      <label class="row small"><input type="checkbox" name="bolts2" checked> отверстия под болты</label>
+    <div class="hidden" data-k="two_part">
+      <div class="form form-2">
+        <label class="field">Что заливать<select name="material">${mats.filter((x) => x.id !== 'silicone').map((x) => `<option value="${x.id}">${esc(x.name)} — ${x.density} г/см³</option>`).join('')}</select></label>
+        <label class="field">Толщина формы, мм<input name="wall2" type="number" value="10" step="1" min="6"></label>
+        <label class="field" title="Пусто — программа сама выберет самое широкое место модели">Высота разъёма, мм<input name="split" type="number" step="0.5" placeholder="авто — по самому широкому месту"></label>
+        <label class="field">Диаметр литника, мм<input name="sprue_d" type="number" value="6" step="0.5" min="3"></label>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" name="vents" checked> воздушники</label>
+        <label><input type="checkbox" name="keys" checked> замки-полусферы</label>
+        <label title="Обычно хватает резинок, струбцин или прищепок"><input type="checkbox" name="bolts2"> отверстия под болты</label>
+      </div>
     </div>
     <div id="mold-res" style="margin-top:12px"></div>
     <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" id="mold-go">Создать</button></div>`);
   const f = m.el;
   const HELP = {
-    silicone_box: 'Стенки-короб вокруг мастер-модели из двух половин на болтах: ставите на ровный стол вокруг модели, заливаете силикон — получаете силиконовую форму.',
+    silicone_box: 'Стенки-короб вокруг мастер-модели из двух половин: ставите на ровный стол вокруг модели, стягиваете прищепками за ушки, заливаете силикон — получаете силиконовую форму.',
     two_part: 'Готовая форма из двух половин: литник с воронкой, воздушники, замки, пазы для разъёма. Сразу лейте гипс, бетон, смолу или воск.',
   };
   const kind = () => f.querySelector('[name=mk]:checked').value;
@@ -745,7 +754,7 @@ async function moldDialog(id) {
   $('#mold-go', f).onclick = async () => {
     const k = kind();
     const options = k === 'silicone_box'
-      ? { gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, bolts: g('bolts').checked, with_base: g('with_base').checked }
+      ? { gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, fastening: g('fastening').value, with_base: g('with_base').checked }
       : { material: g('material').value, wall: +g('wall2').value, split: g('split').value === '' ? 'auto' : +g('split').value,
           sprue_d: +g('sprue_d').value, vents: g('vents').checked, keys: g('keys').checked, bolts: g('bolts2').checked };
     const btn = $('#mold-go', f); btn.disabled = true; btn.textContent = 'Строю…';

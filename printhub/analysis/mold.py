@@ -98,6 +98,9 @@ class MoldResult:
 
 
 def _part(name: str, m: Manifold) -> MoldPart:
+    # убрать вырожденные (нулевой площади) треугольники, которые оставляют булевы операции:
+    # иначе после записи в файл они схлопываются и слайсер/проверка видят «незамкнутую» деталь
+    m = m.simplify(1e-3)
     t = to_trimesh(m)
     return MoldPart(name, t, [round(float(v), 1) for v in t.extents])
 
@@ -121,7 +124,7 @@ def to_3mf(parts: list[MoldPart], title: str, bed_center: tuple[float, float] = 
     layout(parts)
     objs, items = [], []
     for i, p in enumerate(parts, start=1):
-        v = "".join(f'<vertex x="{a:.4f}" y="{b:.4f}" z="{c:.4f}"/>' for a, b, c in p.mesh.vertices)
+        v = "".join(f'<vertex x="{a:.5f}" y="{b:.5f}" z="{c:.5f}"/>' for a, b, c in p.mesh.vertices)
         t = "".join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in p.mesh.faces)
         objs.append(f'<object id="{i}" type="model" name={quoteattr(p.name)}><mesh><vertices>{v}</vertices>'
                     f'<triangles>{t}</triangles></mesh></object>')
@@ -151,13 +154,21 @@ class SiliconeBoxOptions:
     over: float = 8.0          # слой силикона над моделью, мм
     wall: float = 2.4          # толщина стенки опалубки
     base: float = 3.0          # толщина дна
-    bolts: bool = True         # проушины под болты M3, стягивающие половины стенок
+    fastening: str = "clips"   # чем стягивать половины стенок: clips — прищепки/зажимы, bolts — болты M3, none
+    bolts: Optional[bool] = None  # старый параметр: True → болты, False → без креплений
     with_base: bool = False    # печатать дно; по умолчанию нет — стенки ставятся на ровный стол/доску
     density: float = 1.10      # плотность силикона, г/см³
 
 
+FASTEN_TXT = {"clips": "прищепками или канцелярскими зажимами", "bolts": "болтами M3", "none": ""}
+
+
 def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None) -> MoldResult:
     o = o or SiliconeBoxOptions()
+    if o.bolts is not None:
+        o.fastening = "bolts" if o.bolts else "none"
+    if o.fastening not in FASTEN_TXT:
+        o.fastening = "clips"
     model = centered(to_manifold(model_tm))
     x0, y0, _, x1, y1, h = model.bounding_box()
     iw, idp = (x1 - x0) + 2 * o.gap, (y1 - y0) + 2 * o.gap              # внутренний размер короба
@@ -173,14 +184,16 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
     ow, od = iw + 2 * o.wall, idp + 2 * o.wall
     halves = []
     ear_holes = []
-    if o.bolts:
-        ear_w, ear_l = 6.0, 9.0                                         # проушины на стыках половин (x=0)
+    # «ушки» на стыках половин (x=0): под прищепки — тонкие гладкие (вместе 6 мм), под болты — толще и с отверстиями
+    ear_w, ear_l = (3.0, 10.0) if o.fastening == "clips" else (6.0, 9.0)
+    if o.fastening != "none":
         for sy in (-1, 1):
             yb = sy * od / 2
             ys = (yb - sy * o.wall * 0.6, yb + sy * ear_l)            # заходит в стенку — одно целое с ней
             ring += box(-ear_w, ear_w, min(ys), max(ys), (-groove_d + 0.01) if groove_d else 0.0, H)
-            for zf in (0.25, 0.75):
-                ear_holes.append(rod("x", 1.75, -ear_w - 1, ear_w + 1, yb + sy * ear_l / 2, H * zf))
+            if o.fastening == "bolts":
+                for zf in (0.25, 0.75):
+                    ear_holes.append(rod("x", 1.75, -ear_w - 1, ear_w + 1, yb + sy * ear_l / 2, H * zf))
     for h_ in ear_holes:
         ring -= h_
     big = 10 * (ow + od + H)
@@ -190,21 +203,21 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
     parts = [_part("Стенка — половина 1", halves[0]), _part("Стенка — половина 2", halves[1])]
     steps_place = ["Поставьте мастер-модель на ровную гладкую поверхность (стекло, пластик, ламинат) и приклейте "
                    "термоклеем, чтобы не всплыла",
-                   "Поставьте вокруг половины стенок" + (", стяните болтами M3" if o.bolts else "") +
+                   "Поставьте вокруг половины стенок" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "") +
                    "; низ стенок промажьте пластилином или термоклеем, чтобы силикон не подтекал"]
     if not o.with_base:
         return _silicone_result(o, inner, model, iw, idp, H, fill_h, parts, steps_place)
     # дно: плита с пазом под стенки и отметкой контура модели
-    margin = 5.0 + (9.0 if o.bolts else 0.0)
+    margin = 5.0 + (ear_l if o.fastening != "none" else 0.0)
     plate = Manifold.extrude(rrect(ow + 2 * margin, od + 2 * margin, r_in + o.wall + margin), o.base).translate((0, 0, -o.base))
     slot = Manifold.extrude(outer.offset(cl, JoinType.Round, 2.0, 32) - inner.offset(-cl, JoinType.Round, 2.0, 32),
                             groove_d + 0.01).translate((0, 0, -groove_d))
     plate -= slot
-    if o.bolts:                                                         # вырезы в дне под проушины
+    if o.fastening != "none":                                           # вырезы в дне под ушки
         for sy in (-1, 1):
             yb = sy * od / 2
-            ys = (yb, yb + sy * 9.0)
-            plate -= box(-6.0 - cl, 6.0 + cl, min(ys) - cl, max(ys) + cl, -groove_d, 0.01)
+            ys = (yb, yb + sy * ear_l)
+            plate -= box(-ear_w - cl, ear_w + cl, min(ys) - cl, max(ys) + cl, -groove_d, 0.01)
     foot = model.project()                                              # контур модели — куда ставить мастер
     if foot.area() > 1:
         mark = (foot.offset(0.6, JoinType.Round, 2.0, 32) - foot.offset(-0.6, JoinType.Round, 2.0, 32))
@@ -213,7 +226,7 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
 
     parts.insert(0, _part("Дно опалубки", plate))
     steps_place = ["Приклейте мастер-модель к дну по отметке (термоклей или двусторонний скотч), стрелка — перед модели",
-                   "Вставьте половины стенок в паз дна" + (", стяните болтами M3" if o.bolts else "")]
+                   "Вставьте половины стенок в паз дна" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "")]
     return _silicone_result(o, inner, model, iw, idp, H, fill_h, parts, steps_place)
 
 
@@ -229,7 +242,8 @@ def _silicone_result(o: "SiliconeBoxOptions", inner: CrossSection, model: Manifo
         "silicone_cm3": round(cavity_cm3, 1),
         "silicone_g": round(cavity_cm3 * o.density, 0),
         "silicone_g_with_reserve": round(cavity_cm3 * o.density * 1.1, 0),
-        "bolts": "4 болта M3×16 с гайками" if o.bolts else "",
+        "bolts": {"clips": "4 прищепки или канцелярских зажима (по 2 на каждый стык)",
+                  "bolts": "4 болта M3×16 с гайками", "none": ""}[o.fastening],
         "steps": [
             "Напечатайте " + ("дно и " if o.with_base else "") + "две половины стенок, мастер-модель — отдельно",
             *steps_place,
@@ -249,7 +263,7 @@ class TwoPartOptions:
     sprue_d: float = 6.0             # диаметр литника
     vents: bool = True               # воздушники от верхних точек модели
     keys: bool = True                # замки-полусферы
-    bolts: bool = True               # отверстия под болты M4 по краям
+    bolts: bool = False              # отверстия под болты M4 (обычно хватает резинок или струбцин)
     clearance: float = 0.25          # зазор в замках
     density: float = 1.20            # плотность заливки, г/см³
 
@@ -373,7 +387,8 @@ def two_part(model_tm: trimesh.Trimesh, o: TwoPartOptions | None = None) -> Mold
         "steps": [
             "Напечатайте обе половины (они уже лежат полостью вверх)",
             "Обработайте полость разделителем (вазелин, воск или спрей-разделитель)",
-            "Сложите половины по замкам" + (", стяните болтами" if bolt_txt else "") + " или струбцинами",
+            "Сложите половины по замкам и стяните " + ("болтами, резинками или струбцинами" if bolt_txt
+                                                       else "резинками, струбцинами или прищепками"),
             f"Заливайте через воронку литника до появления материала в воздушниках ({len(vents)} шт.)"
             if vents else "Заливайте через воронку литника медленно, постукивая по форме, чтобы вышел воздух",
             "После застывания разнимите форму отвёрткой через пазы на торцах и срежьте литник",
@@ -383,7 +398,25 @@ def two_part(model_tm: trimesh.Trimesh, o: TwoPartOptions | None = None) -> Mold
     return MoldResult("two_part", parts, info, warnings)
 
 
+def size_warnings(model_tm: trimesh.Trimesh) -> list[str]:
+    """Подозрительно маленькая или плоская модель — частая ошибка единиц (файл в сантиметрах/метрах/дюймах)."""
+    ext = [float(v) for v in model_tm.extents]
+    txt = " × ".join(f"{v:.1f}" for v in ext)
+    if max(ext) < 10:
+        return [f"Модель очень маленькая: {txt} мм. Если в жизни она больше — файл, скорее всего, сохранён "
+                "в сантиметрах или метрах: увеличьте её в «Подготовке» (масштаб ×10 или ×1000) и сделайте опалубку заново."]
+    if min(ext) < 1.0:
+        return [f"Модель почти плоская: {txt} мм — проверьте масштаб и толщину."]
+    return []
+
+
 def make_mold(model_tm: trimesh.Trimesh, kind: str, options: dict[str, Any] | None = None) -> MoldResult:
+    res = _make_mold(model_tm, kind, options)
+    res.warnings = size_warnings(model_tm) + res.warnings
+    return res
+
+
+def _make_mold(model_tm: trimesh.Trimesh, kind: str, options: dict[str, Any] | None = None) -> MoldResult:
     options = dict(options or {})
     mat = options.pop("material", None)
     if mat in CAST_MATERIALS:

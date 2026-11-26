@@ -80,3 +80,26 @@ async def test_mold_endpoint(tmp_path):
         assert r2["filename"] == "vase_opalubka.3mf" and r2["info"]["silicone_g"] > 0
         bad = await c.post(f"/api/library/{item['id']}/mold", json={"kind": "nope"})
         assert bad.status_code == 400
+
+
+def test_silicone_box_fastening():
+    """По умолчанию — ушки под прищепки (тонкие, без отверстий); болты — толще и с отверстиями; можно без креплений."""
+    cyl = trimesh.creation.cylinder(radius=10, height=30, sections=64).apply_translation([0, 0, 15])
+    clips = mold.make_mold(cyl, "silicone_box", {})
+    bolts = mold.make_mold(cyl, "silicone_box", {"fastening": "bolts"})
+    plain = mold.make_mold(cyl, "silicone_box", {"fastening": "none"})
+    assert "прищепк" in clips.info["bolts"] and "M3" in bolts.info["bolts"] and plain.info["bolts"] == ""
+    v = lambda r: r.parts[0].mesh.volume                            # noqa: E731  ушки под болты толще, чем под прищепки
+    assert v(bolts) > v(clips) > v(plain)
+    assert clips.parts[0].mesh.extents[1] > plain.parts[0].mesh.extents[1] + 15          # ушки торчат с двух сторон
+    for r in (clips, bolts, plain):
+        assert all(p.mesh.is_watertight and len(p.mesh.split(only_watertight=False)) == 1 for p in r.parts)
+    assert any("прищепк" in s for s in clips.info["steps"])
+    assert mold.make_mold(cyl, "silicone_box", {"bolts": True}).info["bolts"].startswith("4 болта")   # старый параметр
+
+
+def test_tiny_model_warns():
+    tiny = trimesh.creation.box(extents=[3, 2, 0.5])               # модель «в сантиметрах»
+    r = mold.make_mold(tiny, "silicone_box")
+    assert r.warnings and "очень маленькая" in r.warnings[0]
+    assert not mold.make_mold(vase(), "silicone_box").warnings
