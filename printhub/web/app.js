@@ -778,7 +778,10 @@ async function moldDialog(id) {
       <p>✅ Готово: <b>${esc(r.filename)}</b> — добавлен в «Модели», детали уже разложены на столе.</p>
       ${r.warnings.map((w) => `<div class="msg" style="color:var(--warn)">⚠ ${esc(w)}</div>`).join('')}
       <ul class="small">${amount}${i.bolts ? `<li>Крепёж: ${esc(i.bolts)}</li>` : ''}
-        <li>Детали: ${r.parts.map((p) => `${esc(p.name)} (${p.size_mm.join('×')} мм)`).join(', ')}</li></ul>
+        <li>Детали: ${r.parts.map((p) => `${esc(p.name)} (${p.size_mm.join('×')} мм)`).join(', ')}</li>
+        ${r.parts.every((p) => !p.needs_support)
+    ? '<li>🟢 <b>Поддержки не нужны</b> — все наклоны не круче 45°, программа проверила детали послойно, как слайсер. В слайсере поддержки можно выключить.</li>'
+    : r.parts.filter((p) => p.needs_support).map((p) => `<li>🟠 <b>${esc(p.name)}: нужны поддержки</b> — ${fmtNum(p.overhang_cm2, 1)} см² печатается в воздухе (высота ${p.overhang_z.map((z) => fmtNum(z, 0)).join(', ')} мм от стола). Включите в слайсере поддержки «только от стола» или выберите силиконовую форму.</li>`).join('')}</ul>
       <details class="small"><summary>Как пользоваться</summary><ol>${i.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol></details>
       <div class="row" style="margin-top:10px"><a class="btn small" href="/api/library/${r.item_id}/download">⬇ Скачать 3MF</a>
         <button class="btn small primary" id="mold-prep">✨ Подготовить к печати</button></div></div>`;

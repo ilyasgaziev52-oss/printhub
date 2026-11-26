@@ -134,3 +134,23 @@ def test_two_part_picks_vertical_split_for_column():
     # можно заставить резать горизонтально
     rz = mold.make_mold(col, "two_part", {"axis": "z"})
     assert rz.info["split_axis"] == "z" and rz.warnings
+
+
+def test_contour_walls_print_without_supports():
+    # модель расширяется кверху: стенки по контуру идут наружу — должны быть скосом ≤45°, а не ступеньками
+    cone = trimesh.creation.cone(radius=25, height=40, sections=64)
+    cone.apply_transform(trimesh.transformations.rotation_matrix(math.pi, [1, 0, 0]))   # вершиной вниз
+    cone = trimesh.boolean.union([cone, trimesh.creation.cylinder(radius=6, height=8)], engine="manifold")
+    r = mold.make_mold(cone, "silicone_box", {"shape": "contour"})
+    d = r.to_dict()
+    assert all(not p["needs_support"] for p in d["parts"]), d["parts"]
+    assert all(p.overhang_cm2 < 0.2 for p in r.parts)
+
+
+def test_overhang_check_finds_shelf():
+    # Т-образная деталь: полка в воздухе — проверка должна её найти
+    t = mold.to_manifold(trimesh.boolean.union([trimesh.creation.box((10, 10, 20)).apply_translation([0, 0, 10]),
+                                                trimesh.creation.box((40, 10, 3)).apply_translation([0, 0, 21.5])],
+                                               engine="manifold"))
+    cm2, zs = mold.print_overhang(t)
+    assert cm2 == pytest.approx(3.0, abs=0.3) and zs and 19 < zs[0] < 21

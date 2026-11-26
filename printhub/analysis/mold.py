@@ -86,6 +86,8 @@ class MoldPart:
     name: str
     mesh: trimesh.Trimesh
     size_mm: list[float] = field(default_factory=list)
+    overhang_cm2: float = 0.0          # сколько печатается «в воздухе» (нужны поддержки), см²
+    overhang_z: list[float] = field(default_factory=list)   # на каких высотах, мм от стола
 
 
 @dataclass
@@ -97,7 +99,9 @@ class MoldResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "info": self.info, "warnings": self.warnings,
-                "parts": [{"name": p.name, "size_mm": p.size_mm} for p in self.parts]}
+                "parts": [{"name": p.name, "size_mm": p.size_mm, "overhang_cm2": p.overhang_cm2,
+                           "needs_support": p.overhang_cm2 >= SUPPORT_MIN_CM2, "overhang_z": p.overhang_z}
+                          for p in self.parts]}
 
 
 def _part(name: str, m: Manifold) -> MoldPart:
@@ -105,7 +109,35 @@ def _part(name: str, m: Manifold) -> MoldPart:
     # иначе после записи в файл они схлопываются и слайсер/проверка видят «незамкнутую» деталь
     m = m.simplify(1e-3)
     t = to_trimesh(m)
-    return MoldPart(name, t, [round(float(v), 1) for v in t.extents])
+    ov, zs = print_overhang(m)
+    return MoldPart(name, t, [round(float(v), 1) for v in t.extents], ov, zs)
+
+
+SUPPORT_MIN_CM2 = 0.5     # меньше — отдельные пятнышки, принтер их перекидывает мостиком без поддержек
+
+
+def print_overhang(m: Manifold, layer: float = 0.2, reach: float = 0.3) -> tuple[float, list[float]]:
+    """Проверка как в слайсере: деталь режется на слои, «в воздухе» — то, что выступает над предыдущим слоем
+    дальше reach мм (0.2–0.3 мм на слой 0.2 мм — скос около 45°, держится без поддержек).
+    Возвращает площадь без опоры, см², и высоты (мм от стола) самых больших таких мест."""
+    bb = m.bounding_box()
+    z0, z1 = bb[2], bb[5]
+    if z1 - z0 > 150:                       # высокие детали — слоем потолще, проверка та же по углу
+        layer, reach = 0.4, 0.5
+    tot, spots = 0.0, []
+    prev = None
+    z = z0 + layer / 2
+    while z < z1:
+        cs = m.slice(z)
+        if prev is not None:
+            a = (cs - prev.offset(reach, JoinType.Round, 2.0, 12)).area()
+            if a > 0.5:
+                tot += a
+                spots.append((a, z - z0))
+        prev = cs
+        z += layer
+    spots.sort(reverse=True)
+    return round(tot / 100.0, 2), sorted(round(zz, 1) for _, zz in spots[:3])
 
 
 def layout(parts: list[MoldPart], gap: float = 8.0) -> list[tuple[MoldPart, tuple[float, float]]]:
@@ -316,6 +348,16 @@ def _bands(model: Manifold, h: float, H: float, dz: float, gap: float) -> tuple[
     return zs, [c.simplify(0.05) for c in C]
 
 
+SUB = 0.25   # шаг скоса стенки по высоте, мм — не больше слоя печати, чтобы слайсер не видел уступов
+
+
+def _morph(a: CrossSection, b: CrossSection, t: float, d: float) -> CrossSection:
+    """Промежуточный контур между a (t=0) и b (t=1), если они отличаются не больше чем на d:
+    растёт от a не больше t·d и убывает к b — шаг между соседними t не больше (Δt)·d."""
+    u = a + b
+    return (u ^ a.offset(t * d, JoinType.Round, 2.0, 12) ^ b.offset((1 - t) * d, JoinType.Round, 2.0, 12)).simplify(0.02)
+
+
 def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResult:
     model = centered(to_manifold(model_tm))
     x0, y0, _, x1, y1, h = model.bounding_box()
@@ -332,12 +374,23 @@ def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResul
         top = min(za + dz, H)
         z0 = za - (groove_d if i == 0 else 0.0)
         outer = c.offset(o.wall, JoinType.Round, 2.0, 24)
-        rings.append(Manifold.extrude(outer - c, top - z0 + 0.01).translate((0, 0, z0)))
-        if o.fastening != "none":                   # ушки на стыках половин (x = 0), спереди и сзади
-            sb = (outer ^ strip).bounds()
-            for yb, sy in ((sb[1], -1), (sb[3], 1)):
-                ys = (yb - sy * o.wall * 0.6, yb + sy * ear_l)
-                ears.append(box(-ear_w, ear_w, min(ys), max(ys), za, top + 0.01))
+        # переход к следующему слою — не ступенькой dz (слайсер видит плоский уступ и ставит поддержки),
+        # а мелкими шагами ≤ SUB мм: настоящий скос 45°, печатается без поддержек
+        segs = [(z0, top, c, outer)]
+        nxt = C[i + 1] if i + 1 < len(C) else None
+        if nxt is not None and top - za > dz - 1e-6 and (c - nxt).area() + (nxt - c).area() > 0.5:
+            n = max(1, int(math.ceil(dz / SUB)))
+            segs = [(z0, za + dz / n, c, outer)]
+            for k in range(1, n):
+                sc = _morph(c, nxt, k / n, dz)
+                segs.append((za + k * dz / n, za + (k + 1) * dz / n, sc, sc.offset(o.wall, JoinType.Round, 2.0, 24)))
+        for zb, zt, sc, ou in segs:
+            rings.append(Manifold.extrude(ou - sc, zt - zb + 0.01).translate((0, 0, zb)))
+            if o.fastening != "none":               # ушки на стыках половин (x = 0), спереди и сзади
+                sb = (ou ^ strip).bounds()
+                for yb, sy in ((sb[1], -1), (sb[3], 1)):
+                    ys = (yb - sy * o.wall * 0.6, yb + sy * ear_l)
+                    ears.append(box(-ear_w, ear_w, min(ys), max(ys), max(zb, za), zt + 0.01))
     walls = Manifold.batch_boolean(rings + ears, OpType.Add)
     if o.fastening == "bolts":                      # отверстия под болты на ¼ и ¾ высоты
         for zf in (0.25, 0.75):
