@@ -35,3 +35,18 @@ def test_repair_never_invents_much_surface():
     assert fixed.area <= m.area * 1.5 + 1e-6
     # заплатка лежит в пределах исходной модели — ничего не торчит наружу
     assert np.all(fixed.bounds[0] >= m.bounds[0] - 0.5) and np.all(fixed.bounds[1] <= m.bounds[1] + 0.5)
+
+
+def test_meters_and_double_faces_like_sketchup():
+    """Файл из SketchUp: модель в метрах, каждая грань записана дважды (лицом и изнанкой).
+    Загрузка переводит в мм до склейки вершин, ремонт убирает дубли — модель цельная, без «выдуманной» поверхности."""
+    tower = trimesh.util.concatenate([trimesh.creation.box(extents=[0.03, 0.04, 0.1]).apply_translation([0, 0, 0.05]),
+                                      trimesh.creation.box(extents=[0.05, 0.06, 0.01]).apply_translation([0, 0, 0.005])])
+    doubled = trimesh.Trimesh(np.vstack([tower.vertices, tower.vertices]),
+                              np.vstack([tower.faces, tower.faces[:, ::-1] + len(tower.vertices)]), process=False)
+    m = M.load_mesh(doubled.export(file_type="stl"), file_type="stl")
+    assert abs(m.extents[2] - 100) < 1e-3                                                # метры → мм
+    assert any(i.code == "units_fixed" for i in M.analyze_mesh(m).issues)
+    fixed, res = M.repair_mesh(m)
+    assert fixed.is_watertight and not res.destructive
+    assert abs(fixed.area - m.area / 2) < 1.0                                           # ушли только дубли

@@ -51,6 +51,13 @@ def load_mesh(path_or_bytes: str | bytes, file_type: Optional[str] = None) -> tr
         raise ValueError(f"Неподдерживаемый тип геометрии: {type(obj).__name__}")
     if len(mesh.faces) == 0:
         raise ValueError("Пустая модель")
+    # Модель меньше миллиметра — почти наверняка сохранена в метрах (SketchUp, Revit, Blender):
+    # переводим в мм ДО склейки вершин, иначе склейка «съест» все мелкие детали.
+    ext = float(np.max(mesh.extents)) if len(mesh.vertices) else 0.0
+    if 0 < ext < 1.0:
+        mesh.apply_scale(1000.0)
+        mesh.metadata["unit_fix"] = (f"Модель была сохранена в метрах — переведена в миллиметры (×1000): "
+                                     f"{' × '.join(f'{v:.0f}' for v in mesh.extents)} мм")
     # STL хранит каждый треугольник отдельно — склеиваем совпадающие вершины,
     # иначе любая модель выглядит как набор отдельных треугольников с «дырами»
     mesh.merge_vertices(digits_vertex=5)
@@ -188,6 +195,8 @@ def analyze_mesh(mesh: trimesh.Trimesh, build_volume: Optional[list[float]] = No
         iss.append(MeshIssue("bodies", "info", "Несколько отдельных тел", r.bodies))
     if r.units_hint:
         iss.append(MeshIssue("units", "warning", r.units_hint))
+    if mesh.metadata.get("unit_fix"):
+        iss.append(MeshIssue("units_fixed", "info", str(mesh.metadata["unit_fix"])))
     if r.fits_build_volume is False:
         txt = "Не помещается в область печати"
         if r.fits_after_rotation:

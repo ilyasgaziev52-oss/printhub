@@ -21,7 +21,7 @@ from xml.sax.saxutils import quoteattr
 
 import numpy as np
 import trimesh
-from manifold3d import CrossSection, JoinType, Manifold, Mesh
+from manifold3d import CrossSection, JoinType, Manifold, Mesh, OpType
 
 # плотность заливочных материалов, г/см³ (для подсказки, сколько покупать)
 CAST_MATERIALS = {
@@ -41,6 +41,9 @@ def to_manifold(m: trimesh.Trimesh) -> Manifold:
                 tri_verts=np.asarray(m.faces, dtype=np.uint32))
     mesh.merge()
     man = Manifold(mesh)
+    comps = man.decompose()
+    if len(comps) > 1:                      # несколько тел (башня, подиум, рёбра…) — сливаем в одно
+        man = Manifold.batch_boolean(comps, OpType.Add)
     if man.is_empty() or man.volume() <= 0:
         raise ValueError("Модель не замкнутая — сначала исправьте её («Подготовить к печати» или «Исправить»), "
                          "потом стройте опалубку")
