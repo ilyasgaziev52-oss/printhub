@@ -18,12 +18,12 @@ def vase() -> trimesh.Trimesh:
 
 def test_silicone_box():
     cyl = trimesh.creation.cylinder(radius=10, height=40, sections=64).apply_translation([5, 7, 20])
-    r = mold.make_mold(cyl, "silicone_box", {"gap": 8, "over": 8})
+    r = mold.make_mold(cyl, "silicone_box", {"gap": 8, "over": 8, "shape": "box"})
     assert [p.name for p in r.parts] == ["Стенка — половина 1", "Стенка — половина 2"]   # без дна — ставится на стол
     for p in r.parts:
         assert p.mesh.is_watertight and len(p.mesh.split(only_watertight=False)) == 1, p.name
         assert p.mesh.bounds[0][2] == pytest.approx(0, abs=1e-3)                         # ровный низ
-    rb = mold.make_mold(cyl, "silicone_box", {"gap": 8, "over": 8, "with_base": True})
+    rb = mold.make_mold(cyl, "silicone_box", {"gap": 8, "over": 8, "with_base": True, "shape": "box"})
     assert [p.name for p in rb.parts] == ["Дно опалубки", "Стенка — половина 1", "Стенка — половина 2"]
     assert all(p.mesh.is_watertight for p in rb.parts)
     i = r.info
@@ -103,3 +103,17 @@ def test_tiny_model_warns():
     r = mold.make_mold(tiny, "silicone_box")
     assert r.warnings and "очень маленькая" in r.warnings[0]
     assert not mold.make_mold(vase(), "silicone_box").warnings
+
+
+def test_contour_mold_saves_silicone():
+    """«По контуру»: стенки на отступе от модели и по высоте — силикона заметно меньше, чем в коробе."""
+    tower = trimesh.boolean.union([trimesh.creation.box(extents=[60, 60, 10]).apply_translation([0, 0, 5]),
+                                   trimesh.creation.cylinder(radius=15, height=80, sections=64).apply_translation([0, 0, 50])],
+                                  engine="manifold")
+    r = mold.make_mold(tower, "silicone_box", {"gap": 7})
+    i = r.info
+    assert i["shape"] == "contour" and i["saved_pct"] >= 40 and i["silicone_g"] < i["box_silicone_g"]
+    for p in r.parts:
+        assert p.mesh.is_watertight and len(p.mesh.split(only_watertight=False)) == 1
+    # объём силикона ≈ «модель + отступ 7 мм» по слоям минус модель — в разумных пределах
+    assert 0.2 * i["box_silicone_g"] < i["silicone_g"] < 0.7 * i["box_silicone_g"]

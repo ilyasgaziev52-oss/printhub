@@ -712,8 +712,10 @@ async function moldDialog(id) {
     </div>
     <p class="small muted" id="mk-help"></p>
     <div data-k="silicone_box">
-      <div class="form form-2">
-        <label class="field" title="Расстояние от модели до стенки — это толщина силиконовой формы по бокам">Толщина силикона вокруг, мм<input name="gap" type="number" value="8" step="0.5" min="3"></label>
+      <div class="form form-3">
+        <label class="field">Форма стенок<select name="shape">
+          <option value="contour" selected>по контуру модели</option><option value="box">прямоугольный короб</option></select></label>
+        <label class="field" title="Расстояние от модели до стенки — это толщина силиконовой формы по бокам">Отступ от модели, мм<input name="gap" type="number" value="7" step="0.5" min="3"></label>
         <label class="field">Силикон над моделью, мм<input name="over" type="number" value="8" step="0.5" min="3"></label>
         <label class="field">Стенки опалубки, мм<input name="wall" type="number" value="2.4" step="0.2" min="1.2"></label>
         <label class="field">Крепление стенок<select name="fastening">
@@ -740,7 +742,7 @@ async function moldDialog(id) {
     <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" id="mold-go">Создать</button></div>`);
   const f = m.el;
   const HELP = {
-    silicone_box: 'Стенки-короб вокруг мастер-модели из двух половин: ставите на ровный стол вокруг модели, стягиваете прищепками за ушки, заливаете силикон — получаете силиконовую форму.',
+    silicone_box: 'Стенки вокруг мастер-модели из двух половин: «по контуру» они идут на заданном отступе от модели и меняются по высоте — силикона уходит в 2–3 раза меньше, чем в прямоугольном коробе. Ставите на ровный стол вокруг модели, стягиваете прищепками за ушки, заливаете силикон.',
     two_part: 'Готовая форма из двух половин: литник с воронкой, воздушники, замки, пазы для разъёма. Сразу лейте гипс, бетон, смолу или воск.',
   };
   const kind = () => f.querySelector('[name=mk]:checked').value;
@@ -754,7 +756,7 @@ async function moldDialog(id) {
   $('#mold-go', f).onclick = async () => {
     const k = kind();
     const options = k === 'silicone_box'
-      ? { gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, fastening: g('fastening').value, with_base: g('with_base').checked }
+      ? { shape: g('shape').value, gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, fastening: g('fastening').value, with_base: g('with_base').checked }
       : { material: g('material').value, wall: +g('wall2').value, split: g('split').value === '' ? 'auto' : +g('split').value,
           sprue_d: +g('sprue_d').value, vents: g('vents').checked, keys: g('keys').checked, bolts: g('bolts2').checked };
     const btn = $('#mold-go', f); btn.disabled = true; btn.textContent = 'Строю…';
@@ -764,7 +766,8 @@ async function moldDialog(id) {
     const i = r.info;
     const amount = k === 'silicone_box'
       ? `<li>Силикона: <b>${fmtNum(i.silicone_g, 0)} г</b> (${fmtNum(i.silicone_cm3, 0)} см³), с запасом 10% — <b>${fmtNum(i.silicone_g_with_reserve, 0)} г</b></li>
-         <li>Уровень заливки: ${fmtNum(i.fill_height_mm, 0)} мм от дна, внутренний размер ${i.inner_mm.join(' × ')} мм</li>`
+         ${i.box_silicone_g ? `<li>Экономия: <b>${i.saved_pct}%</b> — прямоугольному коробу понадобилось бы ${fmtNum(i.box_silicone_g, 0)} г</li>` : ''}
+         <li>Уровень заливки: ${fmtNum(i.fill_height_mm, 0)} мм от дна, ${i.shape === 'contour' ? 'по низу' : 'внутри'} ${i.inner_mm.slice(0, 2).join(' × ')} мм</li>`
       : `<li>Разъём на высоте <b>${fmtNum(i.split_mm, 1)} мм</b>${i.split_auto ? ' (по самому широкому месту)' : ''}</li>
          <li>Материала на отливку: <b>${fmtNum(i.cast_g, 0)} г</b> (${fmtNum(i.cast_cm3, 1)} см³), с запасом — ${fmtNum(i.cast_g_with_reserve, 0)} г</li>
          <li>Размер формы: ${i.mold_mm.join(' × ')} мм, воздушников: ${i.vents}</li>`;

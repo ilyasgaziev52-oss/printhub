@@ -21,7 +21,7 @@ from xml.sax.saxutils import quoteattr
 
 import numpy as np
 import trimesh
-from manifold3d import CrossSection, JoinType, Manifold, Mesh, OpType
+from manifold3d import CrossSection, FillRule, JoinType, Manifold, Mesh, OpType
 
 # плотность заливочных материалов, г/см³ (для подсказки, сколько покупать)
 CAST_MATERIALS = {
@@ -153,7 +153,8 @@ def to_3mf(parts: list[MoldPart], title: str, bed_center: tuple[float, float] = 
 # ------------------------------------------------------------------ опалубка под силикон
 @dataclass
 class SiliconeBoxOptions:
-    gap: float = 8.0           # зазор от модели до стенки, мм (толщина силикона по бокам)
+    gap: float = 7.0           # отступ от модели до стенки, мм (толщина силикона по бокам)
+    shape: str = "contour"     # contour — стенки по форме модели (меньше силикона); box — прямоугольный короб
     over: float = 8.0          # слой силикона над моделью, мм
     wall: float = 2.4          # толщина стенки опалубки
     base: float = 3.0          # толщина дна
@@ -172,6 +173,8 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
         o.fastening = "bolts" if o.bolts else "none"
     if o.fastening not in FASTEN_TXT:
         o.fastening = "clips"
+    if o.shape == "contour":
+        return contour_box(model_tm, o)
     model = centered(to_manifold(model_tm))
     x0, y0, _, x1, y1, h = model.bounding_box()
     iw, idp = (x1 - x0) + 2 * o.gap, (y1 - y0) + 2 * o.gap              # внутренний размер короба
@@ -208,8 +211,9 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
                    "термоклеем, чтобы не всплыла",
                    "Поставьте вокруг половины стенок" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "") +
                    "; низ стенок промажьте пластилином или термоклеем, чтобы силикон не подтекал"]
+    box_cm3 = (inner.area() * fill_h - model.volume()) / 1000.0
     if not o.with_base:
-        return _silicone_result(o, inner, model, iw, idp, H, fill_h, parts, steps_place)
+        return _silicone_result(o, box_cm3, [iw, idp], H, fill_h, parts, steps_place)
     # дно: плита с пазом под стенки и отметкой контура модели
     margin = 5.0 + (ear_l if o.fastening != "none" else 0.0)
     plate = Manifold.extrude(rrect(ow + 2 * margin, od + 2 * margin, r_in + o.wall + margin), o.base).translate((0, 0, -o.base))
@@ -230,17 +234,18 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
     parts.insert(0, _part("Дно опалубки", plate))
     steps_place = ["Приклейте мастер-модель к дну по отметке (термоклей или двусторонний скотч), стрелка — перед модели",
                    "Вставьте половины стенок в паз дна" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "")]
-    return _silicone_result(o, inner, model, iw, idp, H, fill_h, parts, steps_place)
+    return _silicone_result(o, box_cm3, [iw, idp], H, fill_h, parts, steps_place)
 
 
-def _silicone_result(o: "SiliconeBoxOptions", inner: CrossSection, model: Manifold, iw: float, idp: float, H: float,
-                     fill_h: float, parts: list[MoldPart], steps_place: list[str]) -> MoldResult:
-    cavity_cm3 = (inner.area() * fill_h - model.volume()) / 1000.0
+def _silicone_result(o: "SiliconeBoxOptions", cavity_cm3: float, inner_mm: list[float], H: float,
+                     fill_h: float, parts: list[MoldPart], steps_place: list[str],
+                     extra: Optional[dict[str, Any]] = None) -> MoldResult:
     warnings = []
     if o.gap < 5:
-        warnings.append("Зазор меньше 5 мм — силиконовая форма будет тонкой и может порваться при извлечении")
+        warnings.append("Отступ меньше 5 мм — силиконовая форма будет тонкой и может порваться при извлечении")
     info = {
-        "inner_mm": [round(iw, 1), round(idp, 1), round(H, 1)],
+        "shape": o.shape,
+        "inner_mm": [round(v, 1) for v in inner_mm] + [round(H, 1)],
         "fill_height_mm": round(fill_h, 1),
         "silicone_cm3": round(cavity_cm3, 1),
         "silicone_g": round(cavity_cm3 * o.density, 0),
@@ -255,7 +260,121 @@ def _silicone_result(o: "SiliconeBoxOptions", inner: CrossSection, model: Manifo
             "После отверждения разберите опалубку и извлеките модель из силикона",
         ],
     }
+    info.update(extra or {})
     return MoldResult("silicone_box", parts, info, warnings)
+
+
+# ---------------------------------------------------------------- опалубка по контуру модели
+def _outer_only(cs: CrossSection) -> CrossSection:
+    """Только внешние контуры (внутренние «дворики» заполняем — силикон всё равно туда затечёт)."""
+    polys = [np.asarray(p) for p in cs.to_polygons()]
+    outer = []
+    for p in polys:
+        if len(p) < 3:
+            continue
+        x, y = p[:, 0], p[:, 1]
+        if 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) > 0:
+            outer.append(p)
+    return CrossSection(outer, FillRule.NonZero) if outer else cs
+
+
+def _bands(model: Manifold, h: float, H: float, dz: float, gap: float) -> tuple[list[float], list[CrossSection]]:
+    """Контур полости по высоте: силуэт модели в каждом слое dz + отступ gap; переходы между слоями не круче 45°."""
+    zs = [i * dz for i in range(int(math.ceil(H / dz)))]
+    big = 1e4
+    raw: list[Optional[CrossSection]] = []
+    for za in zs:
+        if za >= h:
+            raw.append(None)
+            continue
+        band = model ^ box(-big, big, -big, big, za - 1e-3, min(za + dz, h) + 1e-3)
+        fp = band.project() if not band.is_empty() else CrossSection()
+        raw.append(fp if fp.area() > 1e-6 else None)
+    # над моделью (слой силикона сверху) и в «пустых» слоях — контур ближайшего слоя с моделью
+    last = None
+    for i in range(len(raw)):
+        if raw[i] is None:
+            raw[i] = last
+        else:
+            last = raw[i]
+    first = next((c for c in raw if c is not None), None)
+    raw = [c if c is not None else first for c in raw]
+    # сглаживание, чтобы стенка не повторяла окна и балконы:
+    # по высоте — объединяем соседние слои в пределах ±6 мм; в плане — «перешагиваем» выемки уже 12 мм
+    k = max(1, int(round(6.0 / dz)))
+    raw = [CrossSection.batch_boolean(raw[max(0, i - k): i + k + 1], OpType.Add).simplify(0.05) for i in range(len(raw))]
+    R = 6.0
+    C = [_outer_only(c.offset(gap + R, JoinType.Round, 2.0, 16).offset(-R, JoinType.Round, 2.0, 16)).simplify(0.1)
+         for c in raw]
+    # не круче 45°: соседние слои отличаются не больше чем на dz (только наращиваем)
+    # после каждого шага упрощаем контур, иначе число точек растёт лавинообразно
+    for _ in range(2):
+        for i in range(1, len(C)):
+            C[i] = (C[i] + C[i - 1].offset(-dz, JoinType.Round, 2.0, 12)).simplify(0.05)
+        for i in range(len(C) - 2, -1, -1):
+            C[i] = (C[i] + C[i + 1].offset(-dz, JoinType.Round, 2.0, 12)).simplify(0.05)
+    return zs, [c.simplify(0.05) for c in C]
+
+
+def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResult:
+    model = centered(to_manifold(model_tm))
+    x0, y0, _, x1, y1, h = model.bounding_box()
+    fill_h = h + o.over
+    H = fill_h + 3.0
+    dz = 1.0 if H <= 120 else 2.0
+    zs, C = _bands(model, h, H, dz, o.gap)
+    groove_d, cl = (1.6 if o.with_base else 0.0), 0.25
+    ear_w, ear_l = (3.0, 10.0) if o.fastening == "clips" else (6.0, 9.0)
+    big = 1e4
+    rings, ears = [], []
+    strip = CrossSection.square((2 * ear_w, 2 * big), True)
+    for i, (za, c) in enumerate(zip(zs, C)):
+        top = min(za + dz, H)
+        z0 = za - (groove_d if i == 0 else 0.0)
+        outer = c.offset(o.wall, JoinType.Round, 2.0, 24)
+        rings.append(Manifold.extrude(outer - c, top - z0 + 0.01).translate((0, 0, z0)))
+        if o.fastening != "none":                   # ушки на стыках половин (x = 0), спереди и сзади
+            sb = (outer ^ strip).bounds()
+            for yb, sy in ((sb[1], -1), (sb[3], 1)):
+                ys = (yb - sy * o.wall * 0.6, yb + sy * ear_l)
+                ears.append(box(-ear_w, ear_w, min(ys), max(ys), za, top + 0.01))
+    walls = Manifold.batch_boolean(rings + ears, OpType.Add)
+    if o.fastening == "bolts":                      # отверстия под болты на ¼ и ¾ высоты
+        for zf in (0.25, 0.75):
+            z = H * zf
+            k = min(int(z // dz), len(C) - 1)
+            sb = (C[k].offset(o.wall, JoinType.Round, 2.0, 24) ^ strip).bounds()
+            for yb, sy in ((sb[1], -1), (sb[3], 1)):
+                walls -= rod("x", 1.75, -ear_w - 1, ear_w + 1, yb + sy * ear_l / 2, z)
+    halves = [walls ^ box(-big, 0, -big, big, -big, big), walls ^ box(0, big, -big, big, -big, big)]
+    parts = [_part("Стенка — половина 1", halves[0]), _part("Стенка — половина 2", halves[1])]
+
+    vol = sum(c.area() * max(0.0, min(dz, fill_h - za)) for za, c in zip(zs, C))
+    cavity_cm3 = (vol - model.volume()) / 1000.0
+    iw, idp = (x1 - x0) + 2 * o.gap, (y1 - y0) + 2 * o.gap
+    box_cm3 = (rrect(iw, idp, min(4.0, o.gap)).area() * fill_h - model.volume()) / 1000.0
+    cb = C[0].bounds()
+    fasten = f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else ""
+    steps_place = ["Поставьте мастер-модель на ровную гладкую поверхность (стекло, пластик, ламинат) и приклейте "
+                   "термоклеем, чтобы не всплыла",
+                   "Поставьте вокруг половины стенок" + fasten +
+                   "; низ стенок промажьте пластилином или термоклеем, чтобы силикон не подтекал"]
+    if o.with_base:
+        foot = C[0]
+        plate = Manifold.extrude(foot.offset(o.wall + 6.0, JoinType.Round, 2.0, 24), o.base).translate((0, 0, -o.base))
+        slot = Manifold.extrude(foot.offset(o.wall + cl, JoinType.Round, 2.0, 24) - foot.offset(-cl, JoinType.Round, 2.0, 24),
+                                groove_d + 0.01).translate((0, 0, -groove_d))
+        plate -= slot
+        mp = model.project()
+        if mp.area() > 1:
+            plate -= Manifold.extrude(mp.offset(0.6, JoinType.Round, 2.0, 24) - mp.offset(-0.6, JoinType.Round, 2.0, 24),
+                                      0.5).translate((0, 0, -0.45))
+        parts.insert(0, _part("Дно опалубки", plate))
+        steps_place = ["Приклейте мастер-модель к дну по отметке (термоклей или двусторонний скотч)",
+                       "Вставьте половины стенок в паз дна" + fasten]
+    extra = {"box_silicone_g": round(box_cm3 * o.density, 0),
+             "saved_pct": round(max(0.0, (1 - cavity_cm3 / box_cm3)) * 100) if box_cm3 > 0 else 0}
+    return _silicone_result(o, cavity_cm3, [cb[2] - cb[0], cb[3] - cb[1]], H, fill_h, parts, steps_place, extra)
 
 
 # ------------------------------------------------------------------ разъёмная форма
