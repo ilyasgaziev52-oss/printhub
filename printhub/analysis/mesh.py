@@ -203,11 +203,25 @@ def analyze_mesh(mesh: trimesh.Trimesh, build_volume: Optional[list[float]] = No
 
 # ---------------------------------------------------------------- ремонт
 
+def _fan_safe(pts: np.ndarray, model_diag: float) -> bool:
+    """Можно ли закрыть дыру «веером» из центра, не исказив модель: контур почти плоский и «звёздный»
+    из центра (все треугольники веера смотрят в одну сторону) — тогда веер точно ложится в плоскость дыры."""
+    c = pts.mean(axis=0)
+    diag = float(np.linalg.norm(np.ptp(pts, axis=0)))
+    _, _, vt = np.linalg.svd(pts - c, full_matrices=False)
+    if float(np.abs((pts - c) @ vt[2]).max()) > 0.12 * diag + 1e-6:
+        return False
+    P = (pts - c) @ vt[:2].T
+    cross = P[:, 0] * np.roll(P[:, 1], -1) - P[:, 1] * np.roll(P[:, 0], -1)
+    return bool((cross > 0).all() or (cross < 0).all())
+
+
 def fill_holes_fan(mesh: trimesh.Trimesh, max_loop: int = 2000) -> int:
     """Заделывает простые дыры «веером» из центра с правильной ориентацией граней.
 
     Граничное полуребро u→v принадлежит существующей грани, значит новая грань должна
     содержать v→u. Неоднозначные (неманифолдные) контуры пропускаются — их чинит MeshFix.
+    Большие, изогнутые и «невыпуклые» дыры тоже пропускаются: веер через них исказил бы модель.
     """
     faces = np.asarray(mesh.faces, dtype=np.int64)
     if len(faces) == 0:
@@ -226,6 +240,8 @@ def fill_holes_fan(mesh: trimesh.Trimesh, max_loop: int = 2000) -> int:
             ambiguous.add(u)
         nxt[u] = v
     verts = [np.asarray(mesh.vertices, dtype=float)]
+    V = verts[0]
+    model_diag = float(np.linalg.norm(np.ptp(V, axis=0))) or 1.0
     new_faces: list[list[int]] = []
     next_index = len(mesh.vertices)
     visited: set[int] = set()
@@ -245,6 +261,8 @@ def fill_holes_fan(mesh: trimesh.Trimesh, max_loop: int = 2000) -> int:
             visited.add(cur)
             cur = nxt[cur]
         if not ok or len(loop) < 3:
+            continue
+        if len(loop) > 3 and not _fan_safe(V[loop], model_diag):
             continue
         if len(loop) == 3:
             a, b, c = loop
@@ -268,6 +286,7 @@ def fill_holes_fan(mesh: trimesh.Trimesh, max_loop: int = 2000) -> int:
 @dataclass
 class RepairResult:
     steps: list[str] = field(default_factory=list)
+    destructive: bool = False          # ремонт был бы разрушительным — модель оставлена без больших заплаток
     before: Optional[MeshReport] = None
     after: Optional[MeshReport] = None
 
@@ -300,6 +319,8 @@ def repair_mesh(mesh: trimesh.Trimesh, *, aggressive: bool = False, remove_debri
                 m = trimesh.util.concatenate(keep)
 
     trimesh.repair.fix_normals(m, multibody=True)
+    area0 = float(m.area)
+    safe_copy = m.copy()
     holes0 = _edge_stats(m)[2]
     if not m.is_watertight:
         fill_holes_fan(m)
@@ -325,6 +346,14 @@ def repair_mesh(mesh: trimesh.Trimesh, *, aggressive: bool = False, remove_debri
                 res.steps.append("Глубокий ремонт (MeshFix): заделка дыр, удаление самопересечений")
         except Exception as e:  # noqa: BLE001
             res.steps.append(f"MeshFix не справился: {e}")
+
+    # защита: ремонт не должен «выдумывать» много новой поверхности (большие заплатки через всю модель)
+    if area0 > 0 and float(m.area) > area0 * 1.5:
+        res.steps = [s for s in res.steps if not s.startswith("Глубокий ремонт")]
+        m = safe_copy
+        res.destructive = True
+        res.steps.append("В модели большие сложные дыры: автоматическая заделка исказила бы её, поэтому они оставлены "
+                         "как есть. Слайсер обычно справляется сам; лучше исправить модель в программе, где её сделали.")
 
     trimesh.repair.fix_normals(m, multibody=True)
     if m.is_watertight and m.volume < 0:
