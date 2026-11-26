@@ -95,8 +95,11 @@ Section "SEBE 3D" SecMain
   CreateDirectory "$SMPROGRAMS\SEBE 3D"
   CreateShortcut "$SMPROGRAMS\SEBE 3D\SEBE 3D.lnk" "$INSTDIR\PrintHub.exe" "" "$INSTDIR\printhub.ico"
   CreateShortcut "$SMPROGRAMS\SEBE 3D\Удалить SEBE 3D.lnk" "$INSTDIR\Uninstall.exe"
+  ; ярлык на рабочем столе пересоздаём при каждом обновлении — чтобы сразу был новый значок
   ${If} ${FileExists} "$DESKTOP\PrintHub.lnk"
+  ${OrIf} ${FileExists} "$DESKTOP\SEBE 3D.lnk"
     Delete "$DESKTOP\PrintHub.lnk"
+    Delete "$DESKTOP\SEBE 3D.lnk"
     CreateShortcut "$DESKTOP\SEBE 3D.lnk" "$INSTDIR\PrintHub.exe" "" "$INSTDIR\printhub.ico"
   ${EndIf}
   ${If} $IsUpdate != "1"
@@ -117,6 +120,9 @@ Section "SEBE 3D" SecMain
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
+
+  ; попросить Windows перечитать значки (иначе ярлык может показывать старый из кэша)
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 
   ; после тихого обновления — сразу запускаем новую версию
   ${If} $IsUpdate == "1"

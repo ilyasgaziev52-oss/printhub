@@ -47,7 +47,8 @@ EOF
 printf '__version__ = "%s"\n' "$VERSION" > "$STAGE/app/printhub/__init__.py"
 
 # 4. Значок и лаунчер PrintHub.exe
-python3 "$PKG/make_icon.py" "$BUILD/printhub.ico"
+# готовый значок SEBE 3D из репозитория (на сборочном сервере нет шрифта Inter); если его нет — рисуем
+if [ -f "$PKG/sebe3d.ico" ]; then cp "$PKG/sebe3d.ico" "$BUILD/printhub.ico"; else python3 "$PKG/make_icon.py" "$BUILD/printhub.ico"; fi
 cp "$BUILD/printhub.ico" "$STAGE/printhub.ico"
 IFS=. read -r V1 V2 V3 _ <<<"$VERSION.0.0"
 sed -e "s/@V1@/$V1/g; s/@V2@/$V2/g; s/@V3@/${V3:-0}/g; s/@VERSION@/$VERSION/g" "$PKG/launcher.rc.in" > "$BUILD/launcher.rc"
