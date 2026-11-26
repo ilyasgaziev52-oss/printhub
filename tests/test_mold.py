@@ -154,3 +154,18 @@ def test_overhang_check_finds_shelf():
                                                engine="manifold"))
     cm2, zs = mold.print_overhang(t)
     assert cm2 == pytest.approx(3.0, abs=0.3) and zs and 19 < zs[0] < 21
+
+
+@pytest.mark.parametrize("shape", ["box", "contour"])
+@pytest.mark.parametrize("fastening", ["clips", "bolts"])
+def test_wall_halves_lock_with_tongue_and_groove(shape, fastening):
+    r = mold.make_mold(vase(), "silicone_box", {"shape": shape, "fastening": fastening, "with_base": shape == "box"})
+    h1, h2 = (p for p in r.parts if p.name.startswith("Стенка"))
+    for p in (h1, h2):
+        assert p.mesh.is_watertight and len(p.mesh.split(only_watertight=False)) == 1, p.name
+        assert p.overhang_cm2 < 0.2, p.name
+    # шип половины 1 заходит за стык, но не задевает половину 2 (в пазу зазор)
+    assert h1.mesh.bounds[1][0] == pytest.approx(mold.LOCK_D, abs=0.01)
+    a, b = mold.to_manifold(h1.mesh), mold.to_manifold(h2.mesh)
+    assert (a ^ b).volume() < 0.01
+    assert "шип" in " ".join(r.info["steps"])

@@ -74,6 +74,12 @@ def rod(axis: str, r: float, a0: float, a1: float, p: float, q: float) -> Manifo
     return c.translate((p, q, a0))
 
 
+def teardrop_x(r: float, a0: float, a1: float, y: float, z: float) -> Manifold:
+    """Горизонтальное отверстие вдоль x каплей — острым углом вверх: печатается без поддержек."""
+    tip = Manifold.cube((a1 - a0, 2 * r, 2 * r), True).rotate((45, 0, 0)) ^ box(-1e4, 1e4, -1e4, 1e4, 0.0, 1e4)
+    return rod("x", r, a0, a1, y, z) + tip.translate(((a0 + a1) / 2, y, z))
+
+
 def centered(model: Manifold) -> Manifold:
     """Модель по центру XY, низ на z=0."""
     x0, y0, z0, x1, y1, _ = model.bounding_box()
@@ -196,6 +202,24 @@ class SiliconeBoxOptions:
     density: float = 1.10      # плотность силикона, г/см³
 
 
+LOCK_D, LOCK_W, LOCK_CL = 1.6, 2.4, 0.2   # шип на стыке половин: выступ, ширина, зазор в пазу, мм
+
+
+def _lock(yc: float, z0: float, z1: float) -> tuple[Manifold, Manifold]:
+    """Шип-паз по высоте стыка (плоскость x = 0): шип растёт из половины 1 (x < 0) в паз половины 2."""
+    tongue = box(-0.5, LOCK_D, yc - LOCK_W / 2, yc + LOCK_W / 2, z0, z1)
+    groove = box(-0.5, LOCK_D + LOCK_CL, yc - LOCK_W / 2 - LOCK_CL, yc + LOCK_W / 2 + LOCK_CL, z0 - 0.01, z1 + 0.01)
+    return tongue, groove
+
+
+def _apply_locks(halves: list[Manifold], locks: list[tuple[Manifold, Manifold]]) -> list[Manifold]:
+    if not locks:
+        return halves
+    t = Manifold.batch_boolean([a for a, _ in locks], OpType.Add)
+    g = Manifold.batch_boolean([b for _, b in locks], OpType.Add)
+    return [halves[0] + t, halves[1] - g]
+
+
 FASTEN_TXT = {"clips": "прищепками или канцелярскими зажимами", "bolts": "болтами M3", "none": ""}
 
 
@@ -222,26 +246,30 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
     ow, od = iw + 2 * o.wall, idp + 2 * o.wall
     halves = []
     ear_holes = []
-    # «ушки» на стыках половин (x=0): под прищепки — тонкие гладкие (вместе 6 мм), под болты — толще и с отверстиями
-    ear_w, ear_l = (3.0, 10.0) if o.fastening == "clips" else (6.0, 9.0)
+    # «ушки» на стыках половин (x=0): под прищепки — гладкие (вместе 8 мм), с шипом и пазом, под болты — толще и с отверстиями
+    ear_w, ear_l = (4.0, 10.0) if o.fastening == "clips" else (6.0, 9.0)
+    locks = []
     if o.fastening != "none":
         for sy in (-1, 1):
             yb = sy * od / 2
             ys = (yb - sy * o.wall * 0.6, yb + sy * ear_l)            # заходит в стенку — одно целое с ней
             ring += box(-ear_w, ear_w, min(ys), max(ys), (-groove_d + 0.01) if groove_d else 0.0, H)
+            locks.append(_lock(yb + sy * ear_l / 2, (-groove_d + 0.01) if groove_d else 0.0, H))
             if o.fastening == "bolts":
                 for zf in (0.25, 0.75):
-                    ear_holes.append(rod("x", 1.75, -ear_w - 1, ear_w + 1, yb + sy * ear_l / 2, H * zf))
+                    ear_holes.append(teardrop_x(1.75, -ear_w - 1, ear_w + 1, yb + sy * ear_l / 2, H * zf))
     for h_ in ear_holes:
         ring -= h_
     big = 10 * (ow + od + H)
     halves.append(ring ^ box(-big, 0, -big, big, -big, big))
     halves.append(ring ^ box(0, big, -big, big, -big, big))
+    halves = _apply_locks(halves, locks)
+    halves = [h_ - Manifold.batch_boolean(ear_holes, OpType.Add) for h_ in halves] if ear_holes else halves
 
     parts = [_part("Стенка — половина 1", halves[0]), _part("Стенка — половина 2", halves[1])]
     steps_place = ["Поставьте мастер-модель на ровную гладкую поверхность (стекло, пластик, ламинат) и приклейте "
                    "термоклеем, чтобы не всплыла",
-                   "Поставьте вокруг половины стенок" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "") +
+                   "Поставьте вокруг половины стенок, вставив шип одной в паз другой" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "") +
                    "; низ стенок промажьте пластилином или термоклеем, чтобы силикон не подтекал"]
     box_cm3 = (inner.area() * fill_h - model.volume()) / 1000.0
     if not o.with_base:
@@ -265,7 +293,7 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
 
     parts.insert(0, _part("Дно опалубки", plate))
     steps_place = ["Приклейте мастер-модель к дну по отметке (термоклей или двусторонний скотч), стрелка — перед модели",
-                   "Вставьте половины стенок в паз дна" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "")]
+                   "Вставьте половины стенок в паз дна, шип одной — в паз другой" + (f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else "")]
     return _silicone_result(o, box_cm3, [iw, idp], H, fill_h, parts, steps_place)
 
 
@@ -366,9 +394,9 @@ def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResul
     dz = 1.0 if H <= 120 else 2.0
     zs, C = _bands(model, h, H, dz, o.gap)
     groove_d, cl = (1.6 if o.with_base else 0.0), 0.25
-    ear_w, ear_l = (3.0, 10.0) if o.fastening == "clips" else (6.0, 9.0)
+    ear_w, ear_l = (4.0, 10.0) if o.fastening == "clips" else (6.0, 9.0)
     big = 1e4
-    rings, ears = [], []
+    rings, ears, locks, allsegs = [], [], [], []
     strip = CrossSection.square((2 * ear_w, 2 * big), True)
     for i, (za, c) in enumerate(zip(zs, C)):
         top = min(za + dz, H)
@@ -384,22 +412,32 @@ def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResul
             for k in range(1, n):
                 sc = _morph(c, nxt, k / n, dz)
                 segs.append((za + k * dz / n, za + (k + 1) * dz / n, sc, sc.offset(o.wall, JoinType.Round, 2.0, 24)))
-        for zb, zt, sc, ou in segs:
-            rings.append(Manifold.extrude(ou - sc, zt - zb + 0.01).translate((0, 0, zb)))
-            if o.fastening != "none":               # ушки на стыках половин (x = 0), спереди и сзади
-                sb = (ou ^ strip).bounds()
-                for yb, sy in ((sb[1], -1), (sb[3], 1)):
-                    ys = (yb - sy * o.wall * 0.6, yb + sy * ear_l)
-                    ears.append(box(-ear_w, ear_w, min(ys), max(ys), max(zb, za), zt + 0.01))
+        allsegs.extend(segs)
+    # ушки — ровной вертикальной полосой с прямым краем (удобно ставить прищепки, шип идёт прямо),
+    # от стенки, где бы она ни была на этой высоте, до общего края
+    edge = {}
+    for zb, zt, sc, ou in allsegs:
+        rings.append(Manifold.extrude(ou - sc, zt - zb + 0.01).translate((0, 0, zb)))
+        sb = (ou ^ strip).bounds()
+        edge[-1] = min(edge.get(-1, 0.0), sb[1])
+        edge[1] = max(edge.get(1, 0.0), sb[3])
+        if o.fastening != "none":
+            for yb, sy in ((sb[1], -1), (sb[3], 1)):
+                ears.append((sy, yb - sy * o.wall * 0.6, max(zb, 0.0), zt))
+    if o.fastening != "none":
+        ears = [box(-ear_w, ear_w, min(y0_, edge[sy] + sy * ear_l), max(y0_, edge[sy] + sy * ear_l), zb, zt + 0.01)
+                for sy, y0_, zb, zt in ears]
+        for sy in (-1, 1):
+            locks.append(_lock(edge[sy] + sy * ear_l / 2, 0.0, H + 0.01))
     walls = Manifold.batch_boolean(rings + ears, OpType.Add)
-    if o.fastening == "bolts":                      # отверстия под болты на ¼ и ¾ высоты
+    halves = [walls ^ box(-big, 0, -big, big, -big, big), walls ^ box(0, big, -big, big, -big, big)]
+    halves = _apply_locks(halves, locks)
+    if o.fastening == "bolts":                      # отверстия под болты на ¼ и ¾ высоты (насквозь, и через шип)
         for zf in (0.25, 0.75):
             z = H * zf
-            k = min(int(z // dz), len(C) - 1)
-            sb = (C[k].offset(o.wall, JoinType.Round, 2.0, 24) ^ strip).bounds()
-            for yb, sy in ((sb[1], -1), (sb[3], 1)):
-                walls -= rod("x", 1.75, -ear_w - 1, ear_w + 1, yb + sy * ear_l / 2, z)
-    halves = [walls ^ box(-big, 0, -big, big, -big, big), walls ^ box(0, big, -big, big, -big, big)]
+            for sy in (-1, 1):
+                hole = teardrop_x(1.75, -ear_w - 1, ear_w + 1, edge[sy] + sy * ear_l / 2, z)
+                halves = [h_ - hole for h_ in halves]
     parts = [_part("Стенка — половина 1", halves[0]), _part("Стенка — половина 2", halves[1])]
 
     vol = sum(c.area() * max(0.0, min(dz, fill_h - za)) for za, c in zip(zs, C))
@@ -410,7 +448,7 @@ def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResul
     fasten = f", стяните {FASTEN_TXT[o.fastening]} за ушки" if o.fastening != "none" else ""
     steps_place = ["Поставьте мастер-модель на ровную гладкую поверхность (стекло, пластик, ламинат) и приклейте "
                    "термоклеем, чтобы не всплыла",
-                   "Поставьте вокруг половины стенок" + fasten +
+                   "Поставьте вокруг половины стенок, вставив шип одной в паз другой" + fasten +
                    "; низ стенок промажьте пластилином или термоклеем, чтобы силикон не подтекал"]
     if o.with_base:
         foot = C[0]
@@ -424,7 +462,7 @@ def contour_box(model_tm: trimesh.Trimesh, o: "SiliconeBoxOptions") -> MoldResul
                                       0.5).translate((0, 0, -0.45))
         parts.insert(0, _part("Дно опалубки", plate))
         steps_place = ["Приклейте мастер-модель к дну по отметке (термоклей или двусторонний скотч)",
-                       "Вставьте половины стенок в паз дна" + fasten]
+                       "Вставьте половины стенок в паз дна, шип одной — в паз другой" + fasten]
     extra = {"box_silicone_g": round(box_cm3 * o.density, 0),
              "saved_pct": round(max(0.0, (1 - cavity_cm3 / box_cm3)) * 100) if box_cm3 > 0 else 0}
     return _silicone_result(o, cavity_cm3, [cb[2] - cb[0], cb[3] - cb[1]], H, fill_h, parts, steps_place, extra)
