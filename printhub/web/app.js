@@ -12,6 +12,10 @@ const TEMP_RU = { nozzle: 'Сопло', nozzle1: 'Сопло 2', bed: 'Стол'
 
 const S = {
   tab: localStorageGet('tab') || 'printers',
+  sub: 'list',            // вкладка «Модели»: list | prepare | calc
+  addOpen: false,         // панель «Найти / добавить» на вкладке «Принтеры»
+  found: null,            // результат последнего поиска в сети
+  discSubnet: '',
   printers: {},          // id -> snapshot
   order: [],
   drivers: [],
@@ -129,11 +133,11 @@ function connectWs() {
       if (S.tab === 'settings') renderUpdatePanel();
     } else if (m.type === 'toast') {
       toast(m.text, m.level === 'error' ? 'error' : 'info', 10000);
-    } else if (m.type === 'library_changed' && S.tab === 'library') {
+    } else if (m.type === 'library_changed' && S.tab === 'models' && S.sub === 'list') {
       renderLibrary();
-    } else if (m.type === 'queue_changed' && S.tab === 'queue') {
+    } else if (m.type === 'queue_changed' && S.tab === 'jobs') {
       renderQueue();
-    } else if (m.type === 'jobs_changed' && S.tab === 'history') {
+    } else if (m.type === 'jobs_changed' && S.tab === 'jobs') {
       renderHistory();
     }
   };
@@ -161,29 +165,53 @@ function onTransfer(t) {
 }
 
 // ------------------------------------------------------------------ навигация
-function setTab(tab) {
-  if (S.prepare.viewer && tab !== 'prepare') { S.prepare.viewer.dispose(); S.prepare.viewer = null; }
+// Четыре вкладки: Принтеры, Модели, Печать, Настройки. Старые разделы — части этих страниц
+// (их имена оставлены псевдонимами: работают внутренние переходы и сохранённая вкладка).
+const TAB_ALIAS = { discover: ['printers'], library: ['models', 'list'], prepare: ['models', 'prepare'], calc: ['models', 'calc'],
+  queue: ['jobs'], history: ['jobs'], materials: ['settings'] };
+function setTab(tab, sub) {
+  if (tab === 'discover') S.addOpen = true;
+  if (TAB_ALIAS[tab]) [tab, sub] = [TAB_ALIAS[tab][0], sub || TAB_ALIAS[tab][1]];
+  if (!['printers', 'models', 'jobs', 'settings'].includes(tab)) tab = 'printers';
+  if (tab === 'models') S.sub = sub || 'list';
+  if (S.prepare.viewer && !(tab === 'models' && S.sub === 'prepare')) { S.prepare.viewer.dispose(); S.prepare.viewer = null; }
   S.tab = tab;
   localStorageSet('tab', tab);
   $$('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  const r = { printers: renderPrinters, discover: renderDiscover, library: renderLibrary, prepare: renderPrepare,
-    calc: renderCalc, queue: renderQueue, history: renderHistory, materials: renderMaterials, settings: renderSettings }[tab];
-  (r || renderPrinters)();
+  ({ printers: renderPrinters, models: renderModels, jobs: renderJobs, settings: renderSettingsPage })[tab]();
+}
+/** Блок страницы-сборки; если пользователь уже ушёл с этой страницы — отрисовка уходит «в никуда», а не поверх другой вкладки. */
+function view(id) { return $('#' + id) || document.createElement('div'); }
+
+function renderModels() {
+  const back = S.sub === 'list' ? '' : '<button class="btn small" id="m-back">← Все модели</button>';
+  $('#main').innerHTML = `<div class="row" style="margin-bottom:8px">${back}<span class="spacer"></span>
+    ${S.sub !== 'calc' ? '<button class="btn small" id="m-calc">₸ Калькулятор</button>' : ''}</div><div id="models-body"></div>`;
+  if ($('#m-back')) $('#m-back').onclick = () => setTab('models', 'list');
+  if ($('#m-calc')) $('#m-calc').onclick = () => setTab('models', 'calc');
+  ({ list: renderLibrary, prepare: renderPrepare, calc: renderCalc })[S.sub]();
+}
+function renderJobs() {
+  $('#main').innerHTML = '<div id="jobs-q"></div><div id="jobs-h" style="margin-top:28px"></div>';
+  renderQueue(); renderHistory();
+}
+function renderSettingsPage() {
+  $('#main').innerHTML = '<div id="set-main"></div><div id="set-mat" style="margin-top:28px"></div>';
+  renderSettings(); renderMaterials();
 }
 $('#nav').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setTab(b.dataset.tab); });
 
 // ------------------------------------------------------------------ принтеры
 function renderPrinters() {
   const main = $('#main');
-  if (!S.order.length) {
-    main.innerHTML = `<div class="panel empty"><h3>Принтеры ещё не добавлены</h3>
-      <p>Найдите принтеры в сети или добавьте вручную.</p>
-      <button class="btn primary" id="go-discover">Найти принтеры</button></div>`;
-    $('#go-discover').onclick = () => setTab('discover');
-    return;
-  }
-  main.innerHTML = `<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Принтеры</h2><span class="spacer"></span>
-    <span class="muted small" id="summary"></span></div><div class="grid" id="cards"></div>`;
+  const open = S.addOpen || !S.order.length;
+  main.innerHTML = `<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Принтеры</h2>
+    <span class="muted small" id="summary"></span><span class="spacer"></span>
+    ${S.order.length ? `<button class="btn ${open ? '' : 'primary'}" id="add-toggle">${open ? '✕ Скрыть поиск' : '🔍 Найти / ＋ добавить принтер'}</button>` : ''}</div>
+    <div id="add-panel" class="${open ? '' : 'hidden'}" style="margin-bottom:16px"></div>
+    <div class="grid" id="cards"></div>`;
+  if ($('#add-toggle')) $('#add-toggle').onclick = () => { S.addOpen = !open; renderPrinters(); };
+  if (open) renderDiscover();
   const cards = $('#cards');
   for (const id of S.order) {
     const card = document.createElement('div');
@@ -358,13 +386,14 @@ const PRESETS = {
 
 async function renderDiscover() {
   if (!S.drivers.length) S.drivers = await api('/drivers');
-  $('#main').innerHTML = `
+  const el = view('add-panel');
+  el.innerHTML = `
   <div class="cols">
     <div>
       <div class="panel">
         <div class="row"><h3 style="margin:0">Поиск в локальной сети</h3><span class="spacer"></span>
           <label class="row small muted"><input type="checkbox" id="scan" checked> сканировать подсеть</label>
-          <input id="subnet" placeholder="${esc(S.info.subnet || '192.168.1.0/24')}" style="width:160px" title="Подсеть для сканирования">
+          <input id="subnet" value="${esc(S.discSubnet)}" placeholder="${esc(S.info.subnet || '192.168.1.0/24')}" style="width:160px" title="Подсеть для сканирования">
           <button class="btn primary" id="discover-btn">🔍 Найти принтеры</button></div>
         <p class="muted small">Bambu Lab находятся по SSDP, Elegoo — по SDCP и UDP-запросу Centauri 2, Anycubic, Klipper и OctoPrint — сканированием портов.
           Программа должна работать на компьютере в той же сети, что и принтеры. Поиск занимает до 15 секунд.</p>
@@ -376,11 +405,14 @@ async function renderDiscover() {
         <label class="field">Модель (заполнит тип и размеры)
           <select id="preset"><option value="">— выберите —</option>${Object.keys(PRESETS).map((k) => `<option>${esc(k)}</option>`).join('')}</select></label>
         <div style="margin-top:10px"><button class="btn primary" id="manual-btn">Заполнить данные…</button></div>
-        <div class="muted small" style="margin-top:12px">${S.drivers.map((d) => `<p><b>${esc(d.title)}</b> — ${esc(d.help)}</p>`).join('')}</div>
+        <details class="muted small" style="margin-top:12px"><summary>Какие принтеры поддерживаются и что для них нужно</summary>
+          ${S.drivers.map((d) => `<p><b>${esc(d.title)}</b> — ${esc(d.help)}</p>`).join('')}</details>
       </div>
     </div>
   </div>`;
   $('#discover-btn').onclick = runDiscovery;
+  $('#subnet').oninput = () => { S.discSubnet = $('#subnet').value; };
+  if (S.found) renderFound(S.found);
   $('#manual-btn').onclick = () => {
     const name = $('#preset').value;
     const pr = PRESETS[name] || { kind: 'bambu' };
@@ -394,8 +426,15 @@ async function runDiscovery() {
   $('#found').innerHTML = '';
   const q = new URLSearchParams({ scan: $('#scan').checked, subnet: $('#subnet').value.trim() });
   const res = await guard(() => api('/discover?' + q));
+  if (!$('#discover-btn')) return;           // пользователь ушёл со страницы
   btn.disabled = false; btn.textContent = '🔍 Найти принтеры';
   if (!res) return;
+  S.found = res;
+  renderFound(res);
+}
+
+function renderFound(res) {
+  if (!$('#found')) return;
   if (!res.printers.length) {
     $('#found').innerHTML = `<div class="msg">Ничего не найдено в ${esc(res.subnet || 'сети')} за ${res.took_s} с.
       Проверьте, что компьютер и принтеры в одной сети и принтеры включены. Bambu Lab: включите «LAN Only» и «Режим разработчика».</div>`;
@@ -407,7 +446,7 @@ async function runDiscovery() {
     ${res.printers.map((d, i) => `<tr><td><b>${esc(d.name || d.model || d.host)}</b><div class="small muted">${esc(d.model)} ${d.serial ? '· ' + esc(d.serial) : ''} ${d.firmware ? '· ' + esc(d.firmware) : ''}</div>
       ${d.notes ? `<div class="small muted">${esc(d.notes)}</div>` : ''}</td>
       <td>${esc(d.host)}</td><td class="small">${esc(kindTitle[d.kind] || d.kind)}</td>
-      <td>${d.already_added ? '<span class="muted small">добавлен</span>' : `<button class="btn small primary" data-add="${i}">Добавить</button>`}</td></tr>`).join('')}
+      <td>${d.already_added || Object.values(S.printers).some((p) => p.config.host === d.host) ? '<span class="muted small">добавлен</span>' : `<button class="btn small primary" data-add="${i}">Добавить</button>`}</td></tr>`).join('')}
     </tbody></table></div>`;
   $$('[data-add]').forEach((b) => {
     b.onclick = () => {
@@ -484,7 +523,7 @@ function editPrinter(cfg, needs = []) {
   $('#save', f).onclick = async () => {
     const body = val();
     const r = await guard(() => (isNew ? api('/printers', { method: 'POST', json: body }) : api(`/printers/${cfg.id}`, { method: 'PUT', json: body })), 'Сохранено');
-    if (r) { m.close(); await refreshPrinters(); if (S.tab === 'discover') renderDiscover(); }
+    if (r) { m.close(); await refreshPrinters(); }
   };
   if (!isNew) {
     $('#del', f).onclick = async () => {
@@ -498,8 +537,8 @@ function editPrinter(cfg, needs = []) {
 // ------------------------------------------------------------------ библиотека
 async function renderLibrary() {
   const items = await api('/library');
-  $('#main').innerHTML = `
-    <div class="row" style="margin-bottom:12px"><h2 style="margin:0">Файлы</h2></div>
+  view('models-body').innerHTML = `
+    <div class="row" style="margin-bottom:12px"><h2 style="margin:0">Модели</h2></div>
     <label class="drop" id="drop">Перетащите сюда файлы или нажмите для выбора<br>
       <span class="small">G-code, 3MF (Bambu/Orca/Elegoo/Anycubic), STL/OBJ/3MF-модели, файлы смолы (.goo, .ctb, .pwmx, .pm4n, .pm5…)</span>
       <input type="file" id="file" multiple hidden></label>
@@ -684,14 +723,14 @@ async function renderPrepare() {
   const items = (await api('/library')).filter((i) => i.kind === 'mesh');
   const printers = S.order.map((id) => S.printers[id]).filter(Boolean);
   if (!items.length) {
-    $('#main').innerHTML = `<div class="panel empty"><h3>Нет 3D-моделей</h3><p>Загрузите STL, OBJ или 3MF во вкладке «Файлы».</p><button class="btn primary" id="go-lib">Перейти к файлам</button></div>`;
+    view('models-body').innerHTML = `<div class="panel empty"><h3>Нет 3D-моделей</h3><p>Загрузите STL, OBJ или 3MF в списке моделей.</p><button class="btn primary" id="go-lib">К списку моделей</button></div>`;
     $('#go-lib').onclick = () => setTab('library');
     return;
   }
   if (!items.find((i) => i.id === S.prepare.id)) S.prepare.id = items[0].id;
   const info = S.info.slicers || [];
   const pr = S.printers[S.prepare.printer];
-  $('#main').innerHTML = `
+  view('models-body').innerHTML = `
   <div class="row" style="margin-bottom:12px">
     <h2 style="margin:0">Подготовка модели</h2><span class="spacer"></span>
     <label class="field">Модель<select id="prep-item">${items.map((i) => `<option value="${i.id}" ${i.id === S.prepare.id ? 'selected' : ''}>${esc(i.filename)}</option>`).join('')}</select></label>
@@ -967,7 +1006,7 @@ async function renderCalc() {
   const [items, materials] = await Promise.all([api('/library'), api('/materials')]);
   S.materials = materials;
   const printers = S.order.map((id) => S.printers[id]).filter(Boolean);
-  $('#main').innerHTML = `<h2>Калькулятор времени и стоимости</h2>
+  view('models-body').innerHTML = `<h2>Калькулятор времени и стоимости</h2>
   <div class="cols"><div class="panel">
     <div class="form">
       <label class="field">Файл из библиотеки<select id="c-item"><option value="">— ввести вручную —</option>${items.map((i) => `<option value="${i.id}" ${i.id === S.calcItem ? 'selected' : ''}>${esc(i.filename)}</option>`).join('')}</select></label>
@@ -1031,7 +1070,7 @@ async function renderQueue() {
   const [q, items] = await Promise.all([api('/queue'), api('/library')]);
   const printers = S.order.map((id) => S.printers[id]).filter(Boolean);
   const printable = items.filter((i) => ['gcode', '3mf', 'resin'].includes(i.kind));
-  $('#main').innerHTML = `<h2>Очередь печати</h2>
+  view('jobs-q').innerHTML = `<h2>Очередь печати</h2>
     <div class="panel"><div class="row">
       <label class="field">Файл<select id="q-item">${printable.map((i) => `<option value="${i.id}">${esc(i.filename)}</option>`).join('')}</select></label>
       <label class="field">Принтер<select id="q-printer"><option value="">— любой подходящий —</option>${printers.map((p) => `<option value="${p.config.id}">${esc(p.config.name)}</option>`).join('')}</select></label>
@@ -1078,7 +1117,7 @@ async function renderHistory() {
   const [jobs, stats] = await Promise.all([api('/jobs'), api('/stats')]);
   const t = stats.total || {};
   const STATUS = { printing: 'печатается', finished: '✓ готово', cancelled: 'отменено', error: '✗ ошибка' };
-  $('#main').innerHTML = `<h2>История и статистика</h2>
+  view('jobs-h').innerHTML = `<h2>История и статистика</h2>
     <div class="panel"><div class="stats">
       <div class="stat"><span class="v">${t.jobs || 0}</span><span class="l">заданий</span></div>
       <div class="stat"><span class="v">${t.jobs ? Math.round((100 * (t.finished || 0)) / t.jobs) : 0}%</span><span class="l">успешных</span></div>
@@ -1096,7 +1135,7 @@ async function renderHistory() {
 // ------------------------------------------------------------------ материалы
 async function renderMaterials() {
   S.materials = await api('/materials');
-  $('#main').innerHTML = `<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Материалы</h2><span class="spacer"></span><button class="btn primary" id="m-add">+ Добавить</button></div>
+  view('set-mat').innerHTML = `<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Материалы</h2><span class="spacer"></span><button class="btn primary" id="m-add">+ Добавить</button></div>
     <div class="panel"><div class="table-wrap"><table><thead><tr><th></th><th>Название</th><th>Тип</th><th>Технология</th><th class="num">Цена за кг</th><th class="num">Плотность</th><th class="num">Остаток</th><th></th></tr></thead><tbody>
     ${S.materials.map((m) => `<tr><td><span class="swatch" style="background:${esc(m.color || '#888')}"></span></td><td>${esc(m.name)}</td><td>${esc(m.type)}</td><td>${m.technology === 'resin' ? 'смола' : 'пластик'}</td>
       <td class="num">${money(m.price)}</td><td class="num">${fmtNum(m.density, 2)} г/см³</td><td class="num">${fmtNum(m.remaining_g, 0)} г${m.remaining_g < 150 ? ' ⚠' : ''}</td>
@@ -1196,7 +1235,7 @@ async function renderSettings() {
   S.settings = await api('/settings');
   const s = S.settings;
   const ev = new Set(s.notify_events || []);
-  $('#main').innerHTML = `<h2>Настройки</h2>
+  view('set-main').innerHTML = `<h2>Настройки</h2>
   <div class="cols"><div>
     <div class="panel"><h3>Стоимость</h3><div class="form">
       <label class="field">Валюта<select name="currency">${CURRENCIES.concat(CURRENCIES.some(([c]) => c === s.currency) || !s.currency ? [] : [[s.currency, s.currency]])
