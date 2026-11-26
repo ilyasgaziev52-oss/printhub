@@ -19,9 +19,13 @@ def vase() -> trimesh.Trimesh:
 def test_silicone_box():
     cyl = trimesh.creation.cylinder(radius=10, height=40, sections=64).apply_translation([5, 7, 20])
     r = mold.make_mold(cyl, "silicone_box", {"gap": 8, "over": 8})
-    assert [p.name for p in r.parts] == ["Дно опалубки", "Стенка — половина 1", "Стенка — половина 2"]
+    assert [p.name for p in r.parts] == ["Стенка — половина 1", "Стенка — половина 2"]   # без дна — ставится на стол
     for p in r.parts:
         assert p.mesh.is_watertight and len(p.mesh.split(only_watertight=False)) == 1, p.name
+        assert p.mesh.bounds[0][2] == pytest.approx(0, abs=1e-3)                         # ровный низ
+    rb = mold.make_mold(cyl, "silicone_box", {"gap": 8, "over": 8, "with_base": True})
+    assert [p.name for p in rb.parts] == ["Дно опалубки", "Стенка — половина 1", "Стенка — половина 2"]
+    assert all(p.mesh.is_watertight for p in rb.parts)
     i = r.info
     assert i["inner_mm"][:2] == [36.0, 36.0] and i["fill_height_mm"] == 48.0
     # короб 36×36 со скруглением 4 мм, высота заливки 48, минус цилиндр

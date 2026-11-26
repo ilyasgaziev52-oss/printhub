@@ -10,10 +10,10 @@ BEGIN
   BEGIN
     BLOCK "041904B0"
     BEGIN
-      VALUE "CompanyName", "PrintHub"
-      VALUE "FileDescription", "PrintHub - 3D printer manager"
+      VALUE "CompanyName", "SEBE"
+      VALUE "FileDescription", "SEBE 3D"
       VALUE "FileVersion", "@VERSION@"
-      VALUE "ProductName", "PrintHub"
+      VALUE "ProductName", "SEBE 3D"
       VALUE "ProductVersion", "@VERSION@"
       VALUE "OriginalFilename", "PrintHub.exe"
     END

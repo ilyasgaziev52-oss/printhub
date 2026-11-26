@@ -1,4 +1,4 @@
-"""HTTP API и веб-интерфейс PrintHub."""
+"""HTTP API и интерфейс SEBE 3D (внутреннее имя пакета — printhub)."""
 from __future__ import annotations
 
 import asyncio
@@ -82,7 +82,7 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         if demo_obj:
             await demo_obj.stop()
 
-    app = FastAPI(title="PrintHub", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="SEBE 3D", version=__version__, lifespan=lifespan)
     app.state.db = db
     app.state.mgr = mgr
     app.state.updater = updater
@@ -118,7 +118,7 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
                 ok = True
             if not ok:
                 return Response("Требуется пароль", status_code=401,
-                                headers={"WWW-Authenticate": 'Basic realm="PrintHub"'})
+                                headers={"WWW-Authenticate": 'Basic realm="SEBE 3D"'})
             resp = await call_next(request)
             resp.set_cookie("ph_session", session_token(pwd), httponly=True, samesite="strict")
             return resp
@@ -862,7 +862,7 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
         if updater.state.get("status") == "up_to_date":
             return dict(updater.state)
         if not updater.state.get("installed"):
-            raise HTTPException(400, "Автоустановка работает в версии, установленной через PrintHub-Setup.exe")
+            raise HTTPException(400, "Автоустановка работает в версии, установленной через установщик SEBE 3D")
         try:
             await updater.download()
         except Exception as e:  # noqa: BLE001
@@ -889,7 +889,7 @@ def create_app(data_dir: Optional[str] = None, demo: bool = False) -> FastAPI:
     async def test_telegram() -> dict[str, Any]:
         s = db.get_settings()
         ok = await send_telegram(s.get("telegram_token", ""), s.get("telegram_chat_id", ""),
-                                 "🖨 PrintHub: тестовое уведомление")
+                                 "🖨 SEBE 3D: тестовое уведомление")
         return {"ok": ok}
 
     # ------------------------------------------------------------------ события

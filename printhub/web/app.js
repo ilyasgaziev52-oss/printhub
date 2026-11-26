@@ -1,4 +1,4 @@
-// PrintHub — веб-интерфейс (без сборки, чистый JS-модуль)
+// SEBE 3D — интерфейс (без сборки, чистый JS-модуль)
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -614,6 +614,7 @@ async function moldDialog(id) {
       <label class="field">Силикон над моделью, мм<input name="over" type="number" value="8" step="0.5" min="3"></label>
       <label class="field">Толщина стенок опалубки, мм<input name="wall" type="number" value="2.4" step="0.2" min="1.2"></label>
       <label class="row small"><input type="checkbox" name="bolts" checked> проушины под болты M3</label>
+      <label class="row small"><input type="checkbox" name="with_base"> печатать дно (обычно не нужно — стенки ставятся на стол)</label>
     </div>
     <div class="form hidden" data-k="two_part">
       <label class="field">Что заливать<select name="material">${mats.filter((x) => x.id !== 'silicone').map((x) => `<option value="${x.id}">${esc(x.name)} — ${x.density} г/см³</option>`).join('')}</select></label>
@@ -628,7 +629,7 @@ async function moldDialog(id) {
     <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" id="mold-go">Создать</button></div>`);
   const f = m.el;
   const HELP = {
-    silicone_box: 'Короб вокруг мастер-модели: дно с отметкой, куда ставить модель, и две половины стенок. Заливаете силикон — получаете силиконовую форму.',
+    silicone_box: 'Стенки-короб вокруг мастер-модели из двух половин на болтах: ставите на ровный стол вокруг модели, заливаете силикон — получаете силиконовую форму.',
     two_part: 'Готовая форма из двух половин: литник с воронкой, воздушники, замки, пазы для разъёма. Сразу лейте гипс, бетон, смолу или воск.',
   };
   const kind = () => f.querySelector('[name=mk]:checked').value;
@@ -642,7 +643,7 @@ async function moldDialog(id) {
   $('#mold-go', f).onclick = async () => {
     const k = kind();
     const options = k === 'silicone_box'
-      ? { gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, bolts: g('bolts').checked }
+      ? { gap: +g('gap').value, over: +g('over').value, wall: +g('wall').value, bolts: g('bolts').checked, with_base: g('with_base').checked }
       : { material: g('material').value, wall: +g('wall2').value, split: g('split').value === '' ? 'auto' : +g('split').value,
           sprue_d: +g('sprue_d').value, vents: g('vents').checked, keys: g('keys').checked, bolts: g('bolts2').checked };
     const btn = $('#mold-go', f); btn.disabled = true; btn.textContent = 'Строю…';
@@ -1345,7 +1346,7 @@ async function renderSettings() {
       <details style="margin-top:8px"><summary class="small muted">Источник обновлений</summary><div class="form" style="grid-template-columns:1fr;margin-top:8px">
         <label class="field">Репозиторий GitHub (владелец/имя)<input name="update_repo" value="${esc(s.update_repo || '')}" placeholder="из сборки"></label>
         <label class="field">или адрес JSON-манифеста<input name="update_url" value="${esc(s.update_url || '')}"></label></div></details></div>
-    <div class="panel small muted">PrintHub ${esc(S.info.version || '')} · данные: <code>${esc(S.info.data_dir || '')}</code></div>
+    <div class="panel small muted">SEBE 3D ${esc(S.info.version || '')} · данные: <code>${esc(S.info.data_dir || '')}</code></div>
   </div></div>
   <div class="row" style="margin-top:14px"><span class="spacer"></span><button class="btn primary" id="save">Сохранить</button></div>`;
   $('#save').onclick = async () => {

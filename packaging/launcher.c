@@ -21,9 +21,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int show) {
     ZeroMemory(&pi, sizeof pi);
     if (!CreateProcessW(exe, line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, cwd, &si, &pi)) {
         wchar_t msg[1024];
-        swprintf(msg, 1024, L"Не удалось запустить PrintHub (ошибка %lu).\nПереустановите программу.\n\n%ls",
+        swprintf(msg, 1024, L"Не удалось запустить SEBE 3D (ошибка %lu).\nПереустановите программу.\n\n%ls",
                  GetLastError(), exe);
-        MessageBoxW(NULL, msg, L"PrintHub", MB_ICONERROR);
+        MessageBoxW(NULL, msg, L"SEBE 3D", MB_ICONERROR);
         return 1;
     }
     CloseHandle(pi.hThread);

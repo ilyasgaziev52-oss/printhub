@@ -25,7 +25,9 @@ from . import build_info
 
 log = logging.getLogger("printhub.updater")
 
-ASSET_RE = re.compile(r"^PrintHub[-_]Setup[-_].*\.exe$", re.I)
+# установщик по-прежнему называется PrintHub-Setup-*.exe (так его находят уже установленные копии);
+# на будущее понимаем и SEBE3D-Setup-*.exe
+ASSET_RE = re.compile(r"^(PrintHub|SEBE[-_ ]?3D)[-_]Setup[-_].*\.exe$", re.I)
 CHECK_INTERVAL = 3600            # фоновая проверка раз в час
 KICK_MIN_AGE = 600               # при открытии программы — не чаще раза в 10 минут
 FIRST_CHECK_DELAY = 60

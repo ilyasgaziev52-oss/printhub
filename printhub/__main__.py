@@ -9,7 +9,7 @@ import threading
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="printhub", description="PrintHub — управление 3D-принтерами в локальной сети")
+    ap = argparse.ArgumentParser(prog="printhub", description="SEBE 3D — управление 3D-принтерами в локальной сети")
     ap.add_argument("--host", default=os.environ.get("PRINTHUB_HOST", "0.0.0.0"),
                     help="адрес для веб-интерфейса (0.0.0.0 — доступен со всех устройств в сети)")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PRINTHUB_PORT", "8080")))
@@ -33,7 +33,7 @@ def main() -> None:
     app = create_app(data_dir, demo=args.demo)
     ip = local_ipv4() or "127.0.0.1"
     url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}"
-    print(f"\n  PrintHub запущен: {url}" + ("  (демо-режим)" if args.demo else ""))
+    print(f"\n  SEBE 3D запущен: {url}" + ("  (демо-режим)" if args.demo else ""))
     if args.host in ("0.0.0.0", "::"):
         print(f"  С телефона/других ПК в сети: http://{ip}:{args.port}\n")
     if not args.no_browser:

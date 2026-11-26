@@ -152,6 +152,7 @@ class SiliconeBoxOptions:
     wall: float = 2.4          # толщина стенки опалубки
     base: float = 3.0          # толщина дна
     bolts: bool = True         # проушины под болты M3, стягивающие половины стенок
+    with_base: bool = False    # печатать дно; по умолчанию нет — стенки ставятся на ровный стол/доску
     density: float = 1.10      # плотность силикона, г/см³
 
 
@@ -165,7 +166,7 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
     r_in = min(4.0, o.gap)
     inner = rrect(iw, idp, r_in)
     outer = inner.offset(o.wall, JoinType.Round, 2.0, 32)
-    groove_d, cl = 1.6, 0.25
+    groove_d, cl = (1.6 if o.with_base else 0.0), 0.25
 
     # стенки: кольцо, нижние 1.6 мм входят в паз дна
     ring = Manifold.extrude(outer - inner, H + groove_d).translate((0, 0, -groove_d))
@@ -177,7 +178,7 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
         for sy in (-1, 1):
             yb = sy * od / 2
             ys = (yb - sy * o.wall * 0.6, yb + sy * ear_l)            # заходит в стенку — одно целое с ней
-            ring += box(-ear_w, ear_w, min(ys), max(ys), -groove_d + 0.01, H)
+            ring += box(-ear_w, ear_w, min(ys), max(ys), (-groove_d + 0.01) if groove_d else 0.0, H)
             for zf in (0.25, 0.75):
                 ear_holes.append(rod("x", 1.75, -ear_w - 1, ear_w + 1, yb + sy * ear_l / 2, H * zf))
     for h_ in ear_holes:
@@ -186,6 +187,13 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
     halves.append(ring ^ box(-big, 0, -big, big, -big, big))
     halves.append(ring ^ box(0, big, -big, big, -big, big))
 
+    parts = [_part("Стенка — половина 1", halves[0]), _part("Стенка — половина 2", halves[1])]
+    steps_place = ["Поставьте мастер-модель на ровную гладкую поверхность (стекло, пластик, ламинат) и приклейте "
+                   "термоклеем, чтобы не всплыла",
+                   "Поставьте вокруг половины стенок" + (", стяните болтами M3" if o.bolts else "") +
+                   "; низ стенок промажьте пластилином или термоклеем, чтобы силикон не подтекал"]
+    if not o.with_base:
+        return _silicone_result(o, inner, model, iw, idp, H, fill_h, parts, steps_place)
     # дно: плита с пазом под стенки и отметкой контура модели
     margin = 5.0 + (9.0 if o.bolts else 0.0)
     plate = Manifold.extrude(rrect(ow + 2 * margin, od + 2 * margin, r_in + o.wall + margin), o.base).translate((0, 0, -o.base))
@@ -203,6 +211,14 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
         plate -= Manifold.extrude(mark, 0.5).translate((0, 0, -0.45))
     plate += box(-1, 1, -idp / 2 + 1.5, -idp / 2 + 5, 0, 0.6)           # стрелка «перед»
 
+    parts.insert(0, _part("Дно опалубки", plate))
+    steps_place = ["Приклейте мастер-модель к дну по отметке (термоклей или двусторонний скотч), стрелка — перед модели",
+                   "Вставьте половины стенок в паз дна" + (", стяните болтами M3" if o.bolts else "")]
+    return _silicone_result(o, inner, model, iw, idp, H, fill_h, parts, steps_place)
+
+
+def _silicone_result(o: "SiliconeBoxOptions", inner: CrossSection, model: Manifold, iw: float, idp: float, H: float,
+                     fill_h: float, parts: list[MoldPart], steps_place: list[str]) -> MoldResult:
     cavity_cm3 = (inner.area() * fill_h - model.volume()) / 1000.0
     warnings = []
     if o.gap < 5:
@@ -215,15 +231,13 @@ def silicone_box(model_tm: trimesh.Trimesh, o: SiliconeBoxOptions | None = None)
         "silicone_g_with_reserve": round(cavity_cm3 * o.density * 1.1, 0),
         "bolts": "4 болта M3×16 с гайками" if o.bolts else "",
         "steps": [
-            "Напечатайте дно и две половины стенок, мастер-модель — отдельно",
-            "Приклейте мастер-модель к дну по отметке (термоклей или двусторонний скотч), стрелка — перед модели",
-            "Вставьте половины стенок в паз дна" + (", стяните болтами M3" if o.bolts else ""),
+            "Напечатайте " + ("дно и " if o.with_base else "") + "две половины стенок, мастер-модель — отдельно",
+            *steps_place,
             "Промажьте стенки и модель разделителем (вазелин или спрей-разделитель)",
             f"Залейте силикон до уровня {fill_h:.0f} мм от дна — модель будет покрыта на {o.over:.0f} мм",
             "После отверждения разберите опалубку и извлеките модель из силикона",
         ],
     }
-    parts = [_part("Дно опалубки", plate), _part("Стенка — половина 1", halves[0]), _part("Стенка — половина 2", halves[1])]
     return MoldResult("silicone_box", parts, info, warnings)
 
 

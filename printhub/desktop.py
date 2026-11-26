@@ -20,7 +20,8 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 
-APP_NAME = "PrintHub"
+APP_NAME = "PrintHub"        # внутреннее имя: папки данных и автозапуска не меняются
+TITLE = "SEBE 3D"           # то, что видит пользователь
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -160,6 +161,37 @@ def autostart_enabled() -> bool:
         return False
 
 
+def _browser_for_window() -> Optional[str]:
+    """Edge (есть во всех Windows 10/11) или Chrome — для окна программы в «режиме приложения»."""
+    if sys.platform != "win32":
+        return None
+    roots = [os.environ.get(k, "") for k in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA")]
+    rels = [r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"]
+    for rel in rels:
+        for r in roots:
+            p = Path(r) / rel if r else None
+            if p and p.is_file():
+                return str(p)
+    return None
+
+
+def open_window(url: str) -> None:
+    """Открывает SEBE 3D отдельным окном программы — без вкладок и адресной строки.
+    Если Edge/Chrome не нашлись — обычным браузером."""
+    exe = _browser_for_window()
+    if exe:
+        try:
+            import subprocess
+            prof = data_dir() / "window"
+            subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--window-size=1400,900",
+                              "--no-first-run", "--no-default-browser-check", "--disable-features=Translate"],
+                             close_fds=True, creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+            return
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("printhub.desktop").warning("окно программы не открылось (%s) — открываю браузер", e)
+    webbrowser.open(url)
+
+
 def set_autostart(on: bool) -> None:
     if sys.platform != "win32":
         return
@@ -196,6 +228,9 @@ def run_tray(url: str, lan_url: str, server: Any, app: Any, stop_event: threadin
         dr.line((18, 44, 46, 44), fill="white", width=5)
 
     def open_ui(icon: Any = None, item: Any = None) -> None:
+        open_window(url)
+
+    def open_browser(icon: Any = None, item: Any = None) -> None:
         webbrowser.open(url)
 
     def open_lan(icon: Any = None, item: Any = None) -> None:
@@ -211,15 +246,15 @@ def run_tray(url: str, lan_url: str, server: Any, app: Any, stop_event: threadin
         try:
             st = fut.result(30)
         except Exception as e:  # noqa: BLE001
-            icon.notify(f"Ошибка проверки: {e}", APP_NAME)
+            icon.notify(f"Ошибка проверки: {e}", TITLE)
             return
         if st.get("status") == "available":
-            icon.notify(f"Доступна версия {st.get('latest')}. Устанавливаю…", APP_NAME)
+            icon.notify(f"Доступна версия {st.get('latest')}. Устанавливаю…", TITLE)
             asyncio.run_coroutine_threadsafe(_download_install(upd), loop)
         elif st.get("status") == "up_to_date":
-            icon.notify(f"Установлена последняя версия ({st.get('current')})", APP_NAME)
+            icon.notify(f"Установлена последняя версия ({st.get('current')})", TITLE)
         else:
-            icon.notify(st.get("error") or "Проверка не удалась", APP_NAME)
+            icon.notify(st.get("error") or "Проверка не удалась", TITLE)
 
     def toggle_autostart(icon: Any, item: Any) -> None:
         set_autostart(not autostart_enabled())
@@ -230,7 +265,8 @@ def run_tray(url: str, lan_url: str, server: Any, app: Any, stop_event: threadin
         icon.stop()
 
     menu = pystray.Menu(
-        pystray.MenuItem("Открыть PrintHub", open_ui, default=True),
+        pystray.MenuItem(f"Открыть {TITLE}", open_ui, default=True),
+        pystray.MenuItem("Открыть в браузере", open_browser),
         pystray.MenuItem(f"Для телефона: {lan_url}", open_lan),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Проверить обновления", check_updates),
@@ -238,7 +274,7 @@ def run_tray(url: str, lan_url: str, server: Any, app: Any, stop_event: threadin
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Выход", quit_app),
     )
-    icon = pystray.Icon(APP_NAME, image, f"{APP_NAME} — {url}", menu)
+    icon = pystray.Icon(APP_NAME, image, f"{TITLE} — {url}", menu)
 
     def watcher() -> None:
         stop_event.wait()
@@ -261,8 +297,8 @@ async def _download_install(upd: Any) -> None:
 
 # ---------------------------------------------------------------- main
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="PrintHub")
-    ap.add_argument("--shutdown", action="store_true", help="остановить запущенный PrintHub")
+    ap = argparse.ArgumentParser(prog="SEBE 3D")
+    ap.add_argument("--shutdown", action="store_true", help="остановить запущенную программу")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--no-tray", action="store_true")
     ap.add_argument("--port", type=int, default=0, help="порт (по умолчанию — прошлый или 8080)")
@@ -282,7 +318,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     inst = read_instance(d)
     if inst and pid_alive(int(inst.get("pid") or 0)) and server_alive(int(inst.get("port") or 0)):
         if not args.no_browser:
-            webbrowser.open(f"http://127.0.0.1:{inst['port']}/")
+            open_window(f"http://127.0.0.1:{inst['port']}/")
         return 0
 
     import asyncio
@@ -307,7 +343,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         app = create_app(str(d))
     except Exception as e:  # noqa: BLE001
         log.exception("ошибка запуска")
-        message_box(f"PrintHub не запустился:\n{e}\n\nПодробности: {d / 'printhub.log'}")
+        message_box(f"{TITLE} не запустился:\n{e}\n\nПодробности: {d / 'printhub.log'}", TITLE)
         return 1
 
     token = secrets.token_hex(16)
@@ -340,16 +376,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             break
         time.sleep(0.1)
     if not server.started:
-        message_box(f"PrintHub не запустился. Подробности: {d / 'printhub.log'}")
+        message_box(f"{TITLE} не запустился. Подробности: {d / 'printhub.log'}", TITLE)
         return 1
 
     instance_file(d).write_text(json.dumps({"pid": os.getpid(), "port": port, "token": token,
                                             "version": __version__}), encoding="utf-8")
     url = f"http://127.0.0.1:{port}/"
     lan_url = f"http://{local_ipv4() or '127.0.0.1'}:{port}/"
-    log.info("PrintHub %s запущен: %s (в сети: %s)", __version__, url, lan_url)
+    log.info("SEBE 3D %s запущен: %s (в сети: %s)", __version__, url, lan_url)
     if not args.no_browser:
-        webbrowser.open(url)
+        open_window(url)
 
     try:
         if not args.no_tray:
@@ -368,7 +404,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 instance_file(d).unlink()
         except OSError:
             pass
-        log.info("PrintHub остановлен")
+        log.info("SEBE 3D остановлен")
     return 0
 
 

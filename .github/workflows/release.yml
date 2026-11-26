@@ -66,4 +66,4 @@ jobs:
         run: |
           V="${{ steps.v.outputs.version }}"
           gh release create "v$V" "dist/PrintHub-Setup-$V.exe" "dist/PrintHub-Setup-$V.exe.sha256" \
-            --target "$GITHUB_SHA" --title "PrintHub $V" --generate-notes
+            --target "$GITHUB_SHA" --title "SEBE 3D $V" --generate-notes

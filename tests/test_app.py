@@ -148,7 +148,7 @@ async def test_full_flow(tmp_path):
             # веб-интерфейс отдаётся
             async with httpx.AsyncClient(timeout=5) as c2:
                 html = (await c2.get(f"http://127.0.0.1:{port}/")).text
-                assert "PrintHub" in html
+                assert "SEBE 3D" in html
     finally:
         server.should_exit = True
         await task
